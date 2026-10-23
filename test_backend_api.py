@@ -158,9 +158,13 @@ class ApiTests(unittest.TestCase):
         barrier=threading.Barrier(2)
         instances=[]
         class Loop:
-            def __init__(self,*a,**kw): instances.append(self)
+            def __init__(self,*a,**kw):
+                from common.trace import AgentTrace
+                self.trace=kw.get('trace') or AgentTrace(folder=None)
+                instances.append(self)
             def run(self,row,*args):
                 self.news_id=row['id'];barrier.wait(5)
+                self.trace.log('news_specific',news_id=self.news_id)
                 self.assert_snapshot=len(news_pool())
                 return dict(news_id=row['id'],title=row['title'],status='reject')
         profile=profile_snapshot()
@@ -172,7 +176,7 @@ class ApiTests(unittest.TestCase):
              patch('stage5_insight_detection.analyst_loop.pool.RelatedNewsPool',return_value=SimpleNamespace(related=SimpleNamespace(news=NEWS))), \
              patch('stage4_news_relevance.news_classifier.classifier.NewsClassifier') as classifier, \
              patch('stage5_insight_detection.analyst_loop.loop.AnalystLoop',Loop), \
-             patch('stage6_insight_generation.insight_card.render.render',return_value='<html/>'):
+             patch('stage6_insight_generation.insight_card.render.render',return_value='<html/>') as rendered:
             classifier.return_value.classify.return_value=scores
             with news_snapshot(NEWS):
                 result=pipeline.run_loop('synthetic','cfo',Mock(),n_candidates=2,n_judge=2,workers=2,
@@ -180,6 +184,10 @@ class ApiTests(unittest.TestCase):
             self.assertEqual(len(result),2)
             self.assertEqual(len([i for i in instances if hasattr(i,'news_id')]),2)
             self.assertTrue(all(i.assert_snapshot==2 for i in instances if hasattr(i,'news_id')))
+            for call in rendered.call_args_list:
+                result,steps=call.args
+                specific=[step['data']['news_id'] for step in steps if step['step']=='news_specific']
+                self.assertEqual(specific,[result['news_id']])
 
     def test_invalid_flag_combinations_and_infinite_budgets(self):
         for kwargs in [dict(ocr_budget=1),dict(bank_budget=1),dict(analytics_refresh=True,analytics_cache_only=True),

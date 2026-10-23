@@ -1,6 +1,7 @@
 """Run: python -m uvicorn backend.app:app --host 127.0.0.1 --port 8000"""
 import hashlib
 import json
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated
@@ -8,6 +9,7 @@ from typing import Annotated
 import pymupdf
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.encoders import jsonable_encoder
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import ValidationError
 
 from backend.jobs import QueueFull
@@ -17,7 +19,7 @@ from common.roles import roles
 from stage5_insight_detection.bank_analytics.prepare import PreparationOptions
 from stage5_insight_detection.bank_analytics.ocr import PDF_DIR
 
-def create_app(service=None):
+def create_app(service=None, cors_origins=None):
     @asynccontextmanager
     async def lifespan(app):
         app.state.service=service or Service()
@@ -32,6 +34,11 @@ def create_app(service=None):
 
     app=FastAPI(title='AlfaFuture Insight API',version='1.0.0',lifespan=lifespan,
                 description='Background agent analyses and PDF preparation. Poll job status/results. Swagger exposes every pipeline switch.')
+
+    origins=cors_origins if cors_origins is not None else [origin.strip() for origin in os.environ.get(
+        'API_CORS_ORIGINS','http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000,http://127.0.0.1:3000').split(',') if origin.strip()]
+    app.add_middleware(CORSMiddleware,allow_origins=origins,allow_credentials=True,
+                       allow_methods=['GET','POST','OPTIONS'],allow_headers=['Content-Type','Authorization'])
 
     def svc(): return app.state.service
     def submit(work):

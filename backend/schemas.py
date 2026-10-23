@@ -66,7 +66,7 @@ class JobResponse(BaseModel):
     id: str
     kind: str
     request: dict
-    status: Literal['queued','running','succeeded','failed','interrupted']
+    status: Literal['queued','running','succeeded','partial','failed','interrupted']
     created_at: str
     finished_at: str | None=None
     result: dict | list | None=None

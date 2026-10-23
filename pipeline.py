@@ -215,10 +215,13 @@ def run_loop(company_id: str, role: str, models: ChatModels, n_candidates: int =
     loop = AnalystLoop(library, pool, agent, InsightWriter(agent), trace=trace,
                        company_facts=facts, reviewer=BankReviewer(budget=bank_budget) if bank_review else None)
     results = []
+    card_traces = {}
+    shared_steps = list(trace.steps())
     def analyze(s):
         row = rows_by_id[str(s['id'])]
+        local_trace = trace if workers == 1 else AgentTrace()
         active_loop = loop if workers == 1 else AnalystLoop(library, pool, agent, InsightWriter(agent),
-            trace=AgentTrace(), company_facts=facts, reviewer=BankReviewer(budget=bank_budget) if bank_review else None)
+            trace=local_trace, company_facts=facts, reviewer=BankReviewer(budget=bank_budget) if bank_review else None)
         result = active_loop.run(row, profile, role, s)
         result['matched_fragments'] = row.get('matched_fragments', [])
         if prepared is not None:
@@ -227,12 +230,17 @@ def run_loop(company_id: str, role: str, models: ChatModels, n_candidates: int =
             result['retrieval'] = {k: row[k] for k in ('event_id', 'event_news_ids', 'generators')}
         if isinstance(source_news, pd.DataFrame):
             result = bind_result(result, source_news, allow_unresolved=True)
-        return result
+        steps = shared_steps + list(local_trace.steps()) if workers > 1 else None
+        return result, steps
     if workers < 1:
         raise ValueError('workers must be positive')
     with ThreadPoolExecutor(workers) as executor:
         jobs=[executor.submit(contextvars.copy_context().run,analyze,score) for score in top]
-        results=[job.result() for job in jobs]
+        for job in jobs:
+            result, steps = job.result()
+            results.append(result)
+            if steps is not None:
+                card_traces[str(result['news_id'])] = steps
     if bank_insights_enabled:
         from stage5_insight_detection.analyst_loop.loop import bank_insights
         from stage5_insight_detection.bank_analytics.theses import ShownLog
@@ -244,7 +252,7 @@ def run_loop(company_id: str, role: str, models: ChatModels, n_candidates: int =
     for r in results:
         source_id = r['thesis']['id'].replace(':', '_') if r.get('origin') == 'bank' else r['news_id']
         (cards / f'{company_id}_{role}_{source_id}.html').write_text(
-            render(json.loads(json.dumps(r, default=str)), trace.steps()), encoding='utf-8')
+            render(json.loads(json.dumps(r, default=str)), card_traces.get(str(r.get('news_id')), trace.steps())), encoding='utf-8')
     return results
 
 

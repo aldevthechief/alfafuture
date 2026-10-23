@@ -46,6 +46,8 @@ class Service:
                 job=self.pdfs.wait(id)
                 if job['status']!='succeeded': raise RuntimeError(job['error'])
         version,library,bank=self.catalog.snapshot(models)
+        components={'news':{'status':'skipped'},'analytics':{'status':'skipped'}}
+        errors=[]
         with news_snapshot():
             news=news_pool() if r.source!='analytics' else None
             if news is not None:
@@ -62,6 +64,7 @@ class Service:
                     r.company_id,r.role,r.candidates,r.judge,retrieval=r.retrieval,workers=r.workers)
             if r.source=='news':
                 results=run_news()
+                components['news']={'status':'succeeded'}
             else:
                 # Copy the pinned news context to the independent analytics task.
                 import contextvars
@@ -80,12 +83,22 @@ class Service:
                     future=executor.submit(contextvars.copy_context().run,analytics)
                     results=run_news()
                     run,error=future.result()
-                    results+=pipeline.analytics_rows(run,error,results,r.analytics_share,r.analytics_cache_only)
-                    if r.source=='analytics' and error: raise RuntimeError(error)
+                    error=error or (getattr(run,'error','') if run is not None else '')
+                    if r.source!='analytics': components['news']={'status':'succeeded'}
+                    if error:
+                        components['analytics']={'status':'failed','error':error}
+                        errors.append({'component':'analytics','message':error})
+                        if r.source=='analytics': raise RuntimeError(error)
+                    elif run is None:
+                        components['analytics']={'status':'cache_miss' if r.analytics_cache_only else 'empty'}
+                    else:
+                        components['analytics']={'status':'succeeded'}
+                        results+=pipeline.analytics_rows(run,'',results,r.analytics_share,r.analytics_cache_only)
             results=[pipeline.migrate_result(row,r.company_id) for row in results]
             if news is not None:
                 save_results(run_dir/'results.json',results,news,DATA/'news')
-            return dict(company_id=r.company_id,role=r.role,bank_version=version,
+            return dict(status='partial' if errors else 'succeeded',components=components,errors=errors,
+                        company_id=r.company_id,role=r.role,bank_version=version,
                         corpus_fingerprint=corpus_fingerprint(news) if news is not None else None,results=results)
 
     def close(self):

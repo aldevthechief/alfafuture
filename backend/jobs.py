@@ -42,7 +42,10 @@ class Jobs:
                     item['status']='running'; self._save(item)
                 result=context.run(work)
                 with self.lock:
-                    item.update(status='succeeded',result=json.loads(json.dumps(result,default=str)))
+                    partial=isinstance(result,dict) and result.get('status')=='partial'
+                    error='; '.join(e['message'] for e in result.get('errors',[])) if partial else None
+                    item.update(status='partial' if partial else 'succeeded',error=error,
+                                result=json.loads(json.dumps(result,default=str)))
             except Exception as exc:
                 with self.lock:
                     item.update(status='failed',error=f'{type(exc).__name__}: {exc}')

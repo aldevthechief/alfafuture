@@ -3,6 +3,8 @@ import hashlib
 import json
 import shutil
 import threading
+
+import numpy as np
 from dataclasses import asdict
 from pathlib import Path
 
@@ -24,20 +26,52 @@ class BankView:
         for p in parts:
             self.twins.update({i+offset:[j+offset for j in js] for i,js in p.twins.items()})
             offset+=len(p.chunks)
+        self.D=np.concatenate([p.D for p in parts if p.chunks],axis=0) if self.chunks else np.empty((0,0))
+        self._lexical=None; self._lexical_lock=threading.Lock(); self.bm25=self._bm25
+        self.segments={};self._context_chunks=[];self._report_titles={}
+        for n,part in enumerate(parts):
+            self.segments.update({f'{n}:{key}':text for key,text in getattr(part,'segments',{}).items()})
+            for chunk in part.chunks:
+                title=f"{n}:{chunk['report']}"
+                self._report_titles[title]=chunk['report']
+                self._context_chunks.append(dict(chunk,report=title,
+                    seg=f"{n}:{chunk['seg']}" if chunk.get('seg') is not None else None))
+
+    def _bm25(self,query):
+        if self._lexical is None:
+            with self._lexical_lock:
+                if self._lexical is None:
+                    from stage5_insight_detection.bank_analytics.search import bm25_index
+                    self._lexical=bm25_index([c['text'] for c in self.chunks])
+        return self._lexical(query)
+
+    def _top(self,query,k,task,w_dense):
+        if k < 0: raise ValueError('k must be nonnegative')
+        if not self.chunks or k == 0: return []
+        # One query embedding and one BM25 vocabulary across ALL published reports.
+        # Cached per-PDF document embeddings remain reusable; their ranks are not fused separately.
+        return BankAnalytics._top(self,query,k,task,w_dense)
 
     def search(self,query,k=5,**kwargs):
-        hits=[r for p in self.parts for r in p.search(query,k,**kwargs)]
-        hits.sort(key=lambda r:(not r.get('stale',True),r['score'],r.get('date','')),reverse=True)
-        return [dict(r,pos=self.index[r['id']]) for r in hits[:k]]
+        from stage5_insight_detection.bank_analytics.search import TASK,W_DENSE
+        top=self._top(query,k,kwargs.get('task',TASK),kwargs.get('w_dense',W_DENSE))
+        return [dict(self.chunks[i],score=score,pos=i) for i,score in top]
 
-    def passages(self,query,k=3,**kwargs):
-        hits=[r for p in self.parts for r in p.passages(query,k,**kwargs)]
-        return sorted(hits,key=lambda r:(not r.get('stale',True),r['score']),reverse=True)[:k]
+    def passages(self,query,k=3,context=2,**kwargs):
+        from stage5_insight_detection.bank_analytics.search import TASK,W_DENSE
+        from stage5_insight_detection.bank_analytics.chunks import passages
+        top=self._top(query,k,kwargs.get('task',TASK),kwargs.get('w_dense',W_DENSE))
+        scores={self.chunks[i]['id']:score for i,score in top}
+        out=passages(self._context_chunks,self.segments,[i for i,_ in top],context)
+        for row in out:
+            row['report']=self._report_titles[row['report']]
+            row['score']=max(scores[id] for id in row['ids'])
+        return sorted(out,key=lambda row:(not row.get('stale',True),row['score'],row.get('date','')),reverse=True)
 
 class Catalog:
     def __init__(self,root: Path,processor=None):
         self.root=Path(root); self.root.mkdir(parents=True,exist_ok=True)
-        self.lock=threading.RLock(); self.report_locks={}; self.loaded={}; self.requested={}
+        self.lock=threading.RLock(); self.report_locks={}; self.loaded={}; self.requested={}; self.views={}
         self.processor=processor or self._process
         path=self.root/'current.json'
         self.current=json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
@@ -94,6 +128,9 @@ class Catalog:
     def snapshot(self,models):
         with self.lock:
             selected=dict(self.current)
+        version=hashlib.sha256(json.dumps(selected,sort_keys=True).encode()).hexdigest()
+        with self.lock:
+            if version in self.views: return self.views[version]
         parts=[]; fragments=[]
         for filename,key in sorted(selected.items()):
             if key not in self.loaded:
@@ -106,4 +143,6 @@ class Catalog:
                         self.loaded[key]=self.processor(self.root/'reports'/key,options,models)
             lib,bank=self.loaded[key]; fragments.extend(lib.fragments);parts.append(bank)
         version=hashlib.sha256(json.dumps(selected,sort_keys=True).encode()).hexdigest()
-        return version,BankLibrary(fragments),BankView(parts)
+        snapshot=(version,BankLibrary(fragments),BankView(parts))
+        with self.lock:
+            return self.views.setdefault(version,snapshot)
