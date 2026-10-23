@@ -184,15 +184,6 @@ class ContractMigrationTests(unittest.TestCase):
 
 
 class SourceChoiceTests(unittest.TestCase):
-    def test_alternative_bank_theses_require_an_explicit_news_only_loop(self):
-        for engine, source in [('judge', 'news'), ('loop', 'both'), ('loop', 'analytics')]:
-            with self.subTest(engine=engine, source=source), redirect_stderr(StringIO()):
-                with self.assertRaises(SystemExit):
-                    pipeline.validate_sources(argparse.ArgumentParser(), SimpleNamespace(
-                        engine=engine, source=source, bank_insights=True))
-        pipeline.validate_sources(argparse.ArgumentParser(), SimpleNamespace(
-            engine='loop', source='news', bank_insights=True))
-
     def test_the_main_analytics_agent_remains_available_with_either_engine(self):
         for engine in ('judge', 'loop'):
             for source in ('news', 'analytics', 'both'):

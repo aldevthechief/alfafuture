@@ -274,45 +274,6 @@ class AnalystLoop:
 
         return {'bank_analytics': bank, 'news': news, 'company_facts': company, 'computation': calculation}
 
-    def run_thesis(self, pick, profile: CompanyProfile, role: str) -> dict:
-        """Run a bank thesis through the same loop, retaining its real report as the pinned source."""
-        from stage5_insight_detection.bank_analytics import theses
-        th = pick.thesis
-        event = EventCard.from_thesis(th, theses.IMPORTANCE[th.value is not None])
-        fragment = self.library.by_id[th.fragment]
-        pinned = BankMatch(fragment, 1.0, {'thesis': th.id, 'direction': {th.topic: 'совпадает'}},
-                           f'тезис Банка: {th.text()}')
-        result = self.run(None, profile, role, event=event, pinned=[pinned], deltas={th.topic: pick.delta})
-        return result | {'thesis': th.dict(), 'pick': pick.dict()}
-
-
-def bank_insights(loop: AnalystLoop, profile: CompanyProfile, role: str, news_results: list[dict], shown,
-                  as_of: date | None = None, now: datetime | None = None, folder=None) -> list[dict]:
-    """Select bank theses, attach covered topics to news results, and suppress already shown bank cards."""
-    from stage5_insight_detection.bank_analytics import theses
-    as_of, now = as_of or date.today(), now or datetime.now()
-    picks = theses.select(theses.collect(loop.library, as_of, folder or theses.DIGEST_DIR), profile, loop.library)
-    covered = {c['topic']: r for r in news_results if r.get('status') == 'ready' and r.get('insight')
-               for c in r.get('consequences', [])}
-    results = []
-    for pick in picks:
-        th = pick.thesis
-        if th.topic in covered:
-            theses.attach(covered[th.topic], th, loop.library.by_id[th.fragment])
-            if not any(r['key'] == th.key() for r in shown.rows.get(profile.id, [])):
-                shown.record(profile.id, th, now, how='news')
-            loop.trace.log('thesis', id=th.id, action='в позицию Банка новостного инсайта', news=covered[th.topic]['news_id'])
-            continue
-        why = shown.blocked(profile.id, th, now)
-        if why:
-            loop.trace.log('thesis', id=th.id, action='пропущен', why=why)
-            continue
-        result = loop.run_thesis(pick, profile, role)
-        results.append(result)
-        if result.get('status') == 'ready':
-            shown.record(profile.id, th, now)
-    return results
-
 
 if __name__ == '__main__':
     import argparse

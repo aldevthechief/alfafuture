@@ -57,10 +57,15 @@ def save_cache(run: v2.AnalysisRun, folder: Path = CACHE) -> Path:
 
 
 def analytics_run(company_id: str, role: str, facts: list[dict], *, models=None, bank=None, cache_only: bool = False, refresh: bool = False,
-                  cache_dir: Path = CACHE, today: str | None = None, pdf_dir: Path = PDF_DIR, agent_factory=None) -> v2.AnalysisRun | None:
+                  cache_dir: Path = CACHE, today: str | None = None, pdf_dir: Path = PDF_DIR, agent_factory=None,
+                  strict: bool = False) -> v2.AnalysisRun | None:
+    # MVP default: the cache wins even when its key is stale (new facts or reports), so the demo pairs never spend the
+    # shared quota; the run is marked stale_cache. strict=True (pipeline --analytics-strict-cache) reruns a stale cache.
     key = cache_key(company_id, role, facts, pdf_dir)
     if not refresh:
-        run = load_cache(company_id, role, key, cache_dir, strict=not cache_only)
+        run = load_cache(company_id, role, key, cache_dir, strict=strict)
+        if run is not None:
+            return run
         if run is not None:
             return run
     if cache_only:

@@ -1,4 +1,5 @@
-"""Lexical + FRIDA + extracted facts, fused before a bounded cross-encoder pass."""
+"""Lexical + e5 (retrieval-v2 tools, text-hash vector cache seeded from Kaggle) + extracted facts,
+fused before a bounded cross-encoder pass. FRIDA is gone: one encoder family serves every dense channel."""
 import warnings
 
 import numpy as np
@@ -8,6 +9,8 @@ from common.chunk_search import chunk_index
 from common.fusion import reciprocal_rank_fusion, top_channel
 from common.news_fact_index import FactIndex, FactStore, fact_fragments
 from common.search import corpus_fingerprint
+
+DEFAULT_INSTRUCTION = 'Given a web search query, retrieve relevant passages that answer the query'
 
 
 def hybrid_search(news: pd.DataFrame, lexical_index, query: str, k: int = 8, *, dense: bool = True,
@@ -23,17 +26,19 @@ def hybrid_search(news: pd.DataFrame, lexical_index, query: str, k: int = 8, *, 
     diagnostics = {}
     if dense:
         try:
-            from common.embed import encode, news_embeddings
-            embeddings = news_embeddings(news=news)
-            vector = encode([query])
+            from stage3_news_search.retrieval_v2.hybrid import MODELS as V2_MODELS, doc_texts, doc_vectors
+            from stage3_news_search.retrieval_v2.hybrid import encode as v2_encode
+            slug, (name, sep, _) = 'e5-large-instruct', V2_MODELS['e5-large-instruct']
+            embeddings = doc_vectors(slug, doc_texts(news))  # data/retrieval_v2/<slug>.npz, seeded from the Kaggle vectors
+            vector = v2_encode(slug, [f'Instruct: {DEFAULT_INSTRUCTION}\n{sep}{query}'])
             scores = (embeddings @ vector.T).reshape(-1)
             if len(scores) != len(news) or not np.isfinite(scores).all():
                 raise ValueError('Invalid semantic scores')
             channels['semantic'] = top_channel(scores, limit)
-            diagnostics['semantic'] = 'ok'
+            diagnostics['semantic'] = f'{slug} ok'
         except (OSError, RuntimeError, ImportError, ValueError) as exc:
             diagnostics['semantic'] = f'unavailable: {exc}'
-            warnings.warn(f'FRIDA search unavailable; using remaining channels: {exc}', RuntimeWarning)
+            warnings.warn(f'e5 semantic search unavailable; using remaining channels: {exc}', RuntimeWarning)
     store = fact_store if fact_store is not None else FactStore()
     facts = FactIndex(news, store.records(news))
     channels['facts'] = top_channel(facts.scores(query), limit)

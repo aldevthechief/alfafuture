@@ -175,7 +175,7 @@ class InsightPipeline:
 @pinned_run
 def run_loop(company_id: str, role: str, models: ChatModels, n_candidates: int = 30, n_judge: int = 5,
              retrieval: str = 'v2', bank_review: bool = False, bank_budget: float | None = None,
-             preparation: 'BankPreparationOptions | None' = None, bank_insights_enabled: bool = False,
+             preparation: 'BankPreparationOptions | None' = None,
              prepared_bank: 'PreparedBank | None' = None) -> list[dict]:
     from common.dedup import dedup_news
     from common.trace import AgentTrace
@@ -226,10 +226,6 @@ def run_loop(company_id: str, role: str, models: ChatModels, n_candidates: int =
         if isinstance(source_news, pd.DataFrame):
             result = bind_result(result, source_news, allow_unresolved=True)
         results.append(result)
-    if bank_insights_enabled:
-        from stage5_insight_detection.analyst_loop.loop import bank_insights
-        from stage5_insight_detection.bank_analytics.theses import ShownLog
-        results.extend(bank_insights(loop, profile, role, results, ShownLog()))
         if isinstance(source_news, pd.DataFrame):
             results = [bind_result(r, source_news, allow_unresolved=True) for r in results]
     cards = DATA / 'insights' / 'cards'
@@ -277,13 +273,6 @@ def budget_arg(value: str) -> float:
     return result
 
 
-def validate_sources(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
-    """Select one bank-only generator before constructing models or touching analytics caches."""
-    if args.bank_insights and (args.engine != 'loop' or args.source != 'news'):
-        parser.error('--bank-insights requires --engine loop --source news; '
-                     '--source analytics/both uses the separate analytics agent')
-
-
 if __name__ == '__main__':
     ap = argparse.ArgumentParser()
     ap.add_argument('company_id')
@@ -298,6 +287,9 @@ if __name__ == '__main__':
     ap.add_argument('--source', choices=['news', 'analytics', 'both'], default='both',
                     help='news = news engines only; analytics = insights from the bank analytics only; both = in parallel, one result list')
     ap.add_argument('--analytics-cache-only', action='store_true', help='analytics: only the cache (a stale one too), never a model call')
+    ap.add_argument('--analytics-strict-cache', action='store_true',
+                    help='analytics: a cache made for other facts or reports counts as stale and the agent runs again '
+                         '(MVP default: the cache wins, no quota spent)')
     ap.add_argument('--analytics-refresh', action='store_true', help='analytics: ignore the cache and run the agent')
     ap.add_argument('--analytics-share', type=float, default=0.4, help='analytics: at most this share of all ready insights (and at least one)')
     ap.add_argument('--ocr', action='store_true', help='OCR bank analytics PDFs and rebuild the bank library first')
@@ -310,7 +302,6 @@ if __name__ == '__main__':
     ap.add_argument('--tables-budget', type=budget_arg, default=None, help='table stage budget, rubles; default 7')
     ap.add_argument('--digest-budget', type=budget_arg, default=None, help='digest stage budget, rubles; default 3')
     ap.add_argument('--bank-review', action='store_true', help='loop: additionally filter bank fragments with the bank analyst agent')
-    ap.add_argument('--bank-insights', action='store_true', help='loop with --source news: use the alternative bank-thesis generator')
     ap.add_argument('--bank-budget', type=float, default=None, help='bank reviewer budget in rubles for this run')
     a = ap.parse_args()
     validate_sources(ap, a)
@@ -353,13 +344,14 @@ if __name__ == '__main__':
         if a.source != 'news':  # in parallel with the news engines: the Langfuse session lives in the copied context
             analytics = ThreadPoolExecutor(1)
             future = analytics.submit(contextvars.copy_context().run, lambda: run_analytics(
-                a.company_id, a.role, models, cache_only=a.analytics_cache_only, refresh=a.analytics_refresh, bank=bank))
+                a.company_id, a.role, models, cache_only=a.analytics_cache_only, refresh=a.analytics_refresh,
+                strict=a.analytics_strict_cache, bank=bank))
         if a.source == 'analytics':
             results = []
         elif a.engine == 'loop':
             results = run_loop(a.company_id, a.role, models, a.candidates, a.judge, retrieval=a.retrieval,
                                bank_review=a.bank_review, bank_budget=a.bank_budget, preparation=preparation,
-                               bank_insights_enabled=a.bank_insights, prepared_bank=prepared_bank)
+                               prepared_bank=prepared_bank)
         else:
             results = InsightPipeline(models.cheap(), models.agent(), bank=bank).run(
                 a.company_id, a.role, a.candidates, a.judge, retrieval=a.retrieval, workers=a.workers)

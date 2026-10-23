@@ -60,8 +60,13 @@ class CallLog(BaseCallbackHandler):
         gen = response.generations[0][0]
         msg = getattr(gen, 'message', None)
         usage = (response.llm_output or {}).get('token_usage') or {}
-        write({'kind': 'llm', 'model': model, 'cached': response.llm_output is None, 'sec': round(time.time() - t0, 2),
-               'in': usage.get('prompt_tokens'), 'out': usage.get('completion_tokens'), 'cost': usage.get('cost'),
+        meta = getattr(msg, 'usage_metadata', None) or {}
+        # a streamed answer has no llm_output: tokens from usage_metadata, the billed cost from response_metadata
+        # (ProxyChatOpenAI); LangChain marks a cache hit with total_cost = 0
+        cached = meta.get('total_cost') == 0 if meta else response.llm_output is None
+        write({'kind': 'llm', 'model': model, 'cached': cached, 'sec': round(time.time() - t0, 2),
+               'in': usage.get('prompt_tokens') or meta.get('input_tokens'), 'out': usage.get('completion_tokens') or meta.get('output_tokens'),
+               'cost': None if cached else usage.get('cost', (getattr(msg, 'response_metadata', None) or {}).get('cost')),
                'prompt': prompt, 'answer': _message(msg) if msg else gen.text}, self.path)
 
     def on_llm_error(self, error: BaseException, *, run_id: UUID, **kw) -> None:

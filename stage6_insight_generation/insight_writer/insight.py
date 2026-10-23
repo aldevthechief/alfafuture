@@ -3,9 +3,10 @@
 Layers are separate fields, as the case requires: facts from news / the bank's view / AI conclusions,
 and every claim carries the ids of its sources (news:<id>, bank:<report>:<page>, fact:<n>).
 """
+import json
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from pydantic.json_schema import SkipJsonSchema
 
 
@@ -52,6 +53,23 @@ class Insight(BaseModel):
     not_bank_position: bool = Field(False, description='аналитики Банка по теме нет: вывод AI, не официальная позиция Банка')
     disclaimer: str = 'Не является инвестиционной рекомендацией.'
     origin: SkipJsonSchema[Literal['news', 'bank']] = 'news'  # assigned by code, not chosen by the model
+
+    # GLM answers in shapes close to the schema: an action as a claim object (when asked for its «because»), the nested
+    # impact as a JSON string; both are normalised here instead of failing the whole insight (U_68622, 23.10: 12 of 17 drafts)
+    @field_validator('actions', mode='before')
+    @classmethod
+    def _action_text(cls, v):
+        return [a.get('text', '') if isinstance(a, dict) else a for a in v] if isinstance(v, list) else v
+
+    @field_validator('hypotheses', mode='before')
+    @classmethod
+    def _hypothesis_claims(cls, v):  # GLM sends a hypothesis as a bare string when its sources are not obvious
+        return [{'text': h, 'sources': [], 'kind': 'hypothesis'} if isinstance(h, str) else h for h in v] if isinstance(v, list) else v
+
+    @field_validator('impact', mode='before')
+    @classmethod
+    def _impact_json(cls, v):
+        return json.loads(v) if isinstance(v, str) and v.strip().startswith('{') else v
 
 
 class Review(BaseModel):

@@ -1,6 +1,6 @@
 """Dense encoder for retrieval. News embeddings are computed once per model
 and cached in data/news/emb_<model>.npz next to the ids and corpus fingerprint they belong to.
-Default ai-forever/FRIDA (top of ruMTEB for Russian); override with ENCODER_MODEL."""
+Default intfloat/multilingual-e5-large-instruct (the retrieval-v2 encoder family); override with ENCODER_MODEL."""
 import os
 from functools import lru_cache
 
@@ -11,9 +11,13 @@ from common.data import DATA
 from common.search import corpus_fingerprint, news_document, news_pool
 from common.news_corpus import _atomic, archive_corpus
 
-MODEL = os.environ.get('ENCODER_MODEL', 'ai-forever/FRIDA')
+MODEL = os.environ.get('ENCODER_MODEL', 'intfloat/multilingual-e5-large-instruct')  # was FRIDA: replaced by the e5 tools (23.10)
 PREFIX = {'ai-forever/FRIDA': ('search_query: ', 'search_document: '),
-          'intfloat/multilingual-e5-base': ('query: ', 'passage: '), 'intfloat/multilingual-e5-large': ('query: ', 'passage: ')}
+          'intfloat/multilingual-e5-base': ('query: ', 'passage: '), 'intfloat/multilingual-e5-large': ('query: ', 'passage: '),
+          # the instruct model queries carry the task; its passages are plain text (model card)
+          'intfloat/multilingual-e5-large-instruct':
+              ('Instruct: Given a web search query, retrieve relevant passages that answer the query
+Query: ', '')}
 
 
 @lru_cache(None)

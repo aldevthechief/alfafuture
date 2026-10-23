@@ -8,6 +8,7 @@ from langchain_core.exceptions import OutputParserException
 from langchain_core.messages import HumanMessage, convert_to_messages
 from langchain_core.prompt_values import PromptValue
 from langchain_core.runnables import Runnable, RunnableConfig, RunnableLambda
+import httpx
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, ValidationError
 
@@ -43,10 +44,28 @@ def trace_config(name: str) -> dict:
     return {'run_name': name, 'callbacks': list(LANGFUSE), 'metadata': {'langfuse_session_id': RUN_ID}}
 
 
-def timeout_for(max_tokens: int) -> float:
-    """Seconds for one call: the full answer at >= 80 tokens/s + 60 s queueing; with one retry a hung request costs at most
-    2 × this (64k -> 860 s); was a flat 900 s × 4 attempts."""
-    return 60 + max_tokens / 80
+# Streamed calls send a chunk every <= 2 s, reasoning included (23.10), so a stream silent for 2 minutes is dead: that is
+# the only client limit. The total duration is bounded by max_tokens and by the proxy, which closes any request at ~15 min.
+TIMEOUT = httpx.Timeout(connect=30.0, read=120.0, write=60.0, pool=60.0)
+
+
+class ProxyChatOpenAI(ChatOpenAI):
+    """Keeps the proxy's billed cost (`usage.cost` of the last streamed chunk), which LangChain's usage parsing drops, and
+    puts every call into the run's Langfuse session even from a thread that did not inherit the run's context."""
+
+    def generate(self, *args, **kwargs):
+        if not LANGFUSE:
+            return super().generate(*args, **kwargs)
+        from langfuse import propagate_attributes
+        with propagate_attributes(session_id=RUN_ID, tags=[RUN_ID.rsplit('-', 2)[0]]):
+            return super().generate(*args, **kwargs)
+
+    def _convert_chunk_to_generation_chunk(self, chunk, default_chunk_class, base_generation_info):
+        gen = super()._convert_chunk_to_generation_chunk(chunk, default_chunk_class, base_generation_info)
+        cost = (chunk.get('usage') or {}).get('cost')
+        if gen is not None and cost is not None:
+            gen.message.response_metadata['cost'] = cost
+        return gen
 
 
 class ChatModels:
@@ -70,8 +89,11 @@ class ChatModels:
     def _make(self, model: str, temperature: float, max_tokens: int) -> ChatOpenAI:
         if not self.settings.llm_api_key:
             raise RuntimeError('set LLM_API_KEY (team key, common/llm/.env)')
-        return ChatOpenAI(model=model, api_key=self.settings.llm_api_key, base_url=self.settings.base_url,
-                          temperature=temperature, max_tokens=max_tokens, max_retries=1, timeout=timeout_for(max_tokens),
+        return ProxyChatOpenAI(model=model, api_key=self.settings.llm_api_key, base_url=self.settings.base_url,
+                          temperature=temperature, max_tokens=max_tokens, max_retries=1, timeout=TIMEOUT,
+                          # the proxy drops a request that sends nothing for 300 s (long GLM reasoning); a streamed answer
+                          # keeps the connection alive (writer calls of 386 and 525 s passed); usage comes in the last chunk
+                          streaming=True, stream_usage=True,
                           callbacks=[*(self.callbacks or []), *LANGFUSE, CALL_LOG], cache=LLM_CACHE,
                           metadata={'langfuse_session_id': RUN_ID})  # session survives worker threads (context vars do not)
 
