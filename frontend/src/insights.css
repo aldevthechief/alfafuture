@@ -47,3 +47,6 @@
 .hitl{padding:20px;margin-top:16px;display:flex;flex-direction:column;gap:8px;border:1.5px solid var(--blue)}
 .hitl-head{display:flex;align-items:center;justify-content:space-between}
 .hitl-input{flex:1}
+
+/* backend status line under the page subtitle */
+.ip-live{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:-4px 0 16px}
