@@ -13,7 +13,6 @@ import re
 from collections import defaultdict
 from datetime import date
 
-from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from stage5_insight_detection.bank_analytics.fragments import CAPTION, prose_reason, use_fragment
 
@@ -54,6 +53,7 @@ def build_chunks(rows: list[dict], token_len, chunk_tokens: int = CHUNK_TOKENS, 
     by_report = defaultdict(list)
     for f in rows:
         by_report[f['report']].append(f)
+    from langchain_text_splitters import RecursiveCharacterTextSplitter
     splitter = RecursiveCharacterTextSplitter(chunk_size=chunk_tokens, chunk_overlap=overlap_tokens, length_function=token_len,
                                               separators=SEPARATORS, add_start_index=True) if chunk_tokens else None
     chunks, segments = [], {}

@@ -52,7 +52,8 @@ def load_cache(company_id: str, role: str, key: str, folder: Path = CACHE, stric
 def save_cache(run: v2.AnalysisRun, folder: Path = CACHE) -> Path:
     path = cache_file(run.company_id, run.role, folder)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(run.model_copy(update={'cached': False, 'stale_cache': False}).model_dump_json(indent=1), encoding='utf-8')
+    from common.news_corpus import _atomic
+    _atomic(path, lambda target: target.write_text(run.model_copy(update={'cached': False, 'stale_cache': False}).model_dump_json(indent=1), encoding='utf-8'))
     return path
 
 

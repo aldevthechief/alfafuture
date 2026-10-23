@@ -24,7 +24,7 @@ LOOK_DPI = 150  # enough to read a chart; the long side is capped by the model, 
 class BankTools:
     def __init__(self, bank: BankAnalytics | None, vision: BaseChatModel | None = None, reports: list[dict] | None = None,
                  on_search: Callable[[list[dict]], None] | None = None):
-        self.bank, self.vision, self.reports = bank, vision, reports or REPORTS
+        self.bank, self.vision, self.reports = bank, vision, reports or getattr(bank, 'reports', None) or REPORTS
         self.on_search = on_search
         # Per tool session, never on the shared search index: independent news/workers cannot leak evidence.
         self.evidence: dict[str, dict] = {}
@@ -106,7 +106,7 @@ class BankTools:
         r = self._report(report)
         if r is None or self.vision is None:
             return 'look_at_page unavailable: unknown report or no vision model'
-        with pymupdf.open(PDF_DIR / r['file']) as doc:
+        with pymupdf.open(getattr(self.bank, 'pdf_paths', {}).get(r['file'], PDF_DIR / r['file'])) as doc:
             if not 1 <= page <= len(doc):
                 return f"page {page} out of range 1..{len(doc)}"
             png = doc[page - 1].get_pixmap(matrix=pymupdf.Matrix(LOOK_DPI / 72, LOOK_DPI / 72)).tobytes('png')

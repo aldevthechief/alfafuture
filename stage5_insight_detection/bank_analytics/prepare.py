@@ -20,6 +20,7 @@ from stage5_insight_detection.bank_analytics.tables import run_pages as read_tab
 
 @dataclass(frozen=True)
 class PreparationOptions:
+    ocr: bool = False
     charts: bool = False
     tables: bool = False
     digests: bool = False
@@ -36,7 +37,7 @@ class PreparationOptions:
 
     @property
     def enabled(self):
-        return self.charts or self.tables or self.digests
+        return self.ocr or self.charts or self.tables or self.digests
 
 
 @dataclass

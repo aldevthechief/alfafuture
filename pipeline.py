@@ -176,7 +176,7 @@ class InsightPipeline:
 def run_loop(company_id: str, role: str, models: ChatModels, n_candidates: int = 30, n_judge: int = 5,
              retrieval: str = 'v2', bank_review: bool = False, bank_budget: float | None = None,
              preparation: 'BankPreparationOptions | None' = None, bank_insights_enabled: bool = False,
-             prepared_bank: 'PreparedBank | None' = None) -> list[dict]:
+             prepared_bank: 'PreparedBank | None' = None, workers: int = 1, cards_dir: Path | None = None) -> list[dict]:
     from common.dedup import dedup_news
     from common.trace import AgentTrace
     from stage4_news_relevance.news_classifier.classifier import NewsClassifier
@@ -215,9 +215,11 @@ def run_loop(company_id: str, role: str, models: ChatModels, n_candidates: int =
     loop = AnalystLoop(library, pool, agent, InsightWriter(agent), trace=trace,
                        company_facts=facts, reviewer=BankReviewer(budget=bank_budget) if bank_review else None)
     results = []
-    for s in top:
+    def analyze(s):
         row = rows_by_id[str(s['id'])]
-        result = loop.run(row, profile, role, s)
+        active_loop = loop if workers == 1 else AnalystLoop(library, pool, agent, InsightWriter(agent),
+            trace=AgentTrace(), company_facts=facts, reviewer=BankReviewer(budget=bank_budget) if bank_review else None)
+        result = active_loop.run(row, profile, role, s)
         result['matched_fragments'] = row.get('matched_fragments', [])
         if prepared is not None:
             result['bank_preparation'] = prepared.report
@@ -225,14 +227,19 @@ def run_loop(company_id: str, role: str, models: ChatModels, n_candidates: int =
             result['retrieval'] = {k: row[k] for k in ('event_id', 'event_news_ids', 'generators')}
         if isinstance(source_news, pd.DataFrame):
             result = bind_result(result, source_news, allow_unresolved=True)
-        results.append(result)
+        return result
+    if workers < 1:
+        raise ValueError('workers must be positive')
+    with ThreadPoolExecutor(workers) as executor:
+        jobs=[executor.submit(contextvars.copy_context().run,analyze,score) for score in top]
+        results=[job.result() for job in jobs]
     if bank_insights_enabled:
         from stage5_insight_detection.analyst_loop.loop import bank_insights
         from stage5_insight_detection.bank_analytics.theses import ShownLog
         results.extend(bank_insights(loop, profile, role, results, ShownLog()))
         if isinstance(source_news, pd.DataFrame):
             results = [bind_result(r, source_news, allow_unresolved=True) for r in results]
-    cards = DATA / 'insights' / 'cards'
+    cards = cards_dir if cards_dir is not None else DATA / 'insights' / 'cards'
     cards.mkdir(parents=True, exist_ok=True)
     for r in results:
         source_id = r['thesis']['id'].replace(':', '_') if r.get('origin') == 'bank' else r['news_id']
@@ -359,7 +366,7 @@ if __name__ == '__main__':
         elif a.engine == 'loop':
             results = run_loop(a.company_id, a.role, models, a.candidates, a.judge, retrieval=a.retrieval,
                                bank_review=a.bank_review, bank_budget=a.bank_budget, preparation=preparation,
-                               bank_insights_enabled=a.bank_insights, prepared_bank=prepared_bank)
+                               bank_insights_enabled=a.bank_insights, prepared_bank=prepared_bank, workers=a.workers)
         else:
             results = InsightPipeline(models.cheap(), models.agent(), bank=bank).run(
                 a.company_id, a.role, a.candidates, a.judge, retrieval=a.retrieval, workers=a.workers)

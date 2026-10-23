@@ -3,6 +3,10 @@
 `FileLLMCache`: LangChain cache for every model call (prompt + model + params), plugged into all `ChatModels` models."""
 import hashlib
 import json
+import threading
+
+_CACHE_LOCK = threading.RLock()
+_KEY_LOCKS = {}
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
@@ -23,15 +27,24 @@ class JsonlCache:
         return self._load().get(key)
 
     def put(self, key: str, value: Any) -> None:
-        self._load()[key] = value
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        with open(self.path, 'a', encoding='utf-8') as f:
-            f.write(json.dumps({'key': key, 'value': value}, ensure_ascii=False) + '\n')
+        with _CACHE_LOCK:
+            self._load()[key] = value
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            with open(self.path, 'a', encoding='utf-8') as f:
+                f.write(json.dumps({'key': key, 'value': value}, ensure_ascii=False) + '\n')
 
     def get_or_compute(self, key: str, compute: Callable[[], Any]) -> Any:
-        if key not in self._load():
-            self.put(key, compute())
-        return self._values[key]
+        with _CACHE_LOCK:
+            lock = _KEY_LOCKS.setdefault((str(self.path.resolve()), key), threading.RLock())
+        with lock:
+            with _CACHE_LOCK:
+                self._values = None
+                values = self._load()
+                if key in values:
+                    return values[key]
+            value = compute()
+            self.put(key, value)
+            return value
 
     def _load(self) -> dict[str, Any]:
         if self._values is None:
