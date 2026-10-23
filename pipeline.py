@@ -21,10 +21,9 @@ lexical = the facet search. --candidates limits distinct events in v2 / hybrid m
 scored by the batch classifier (scores only), and the top news go through bank match -> news pool -> computed
 consequences -> grounds check -> data requests -> verdict -> writer -> audit; journal in data/traces/<run>.jsonl.
 """
-import argparse, contextvars, json, math, sys
-from concurrent.futures import ThreadPoolExecutor
+import argparse, contextvars, json, math, operator, sys
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import Annotated, TYPE_CHECKING, TypedDict
 
 import pandas as pd
 
@@ -33,6 +32,8 @@ from stage2_company_facts.profile.context import CONTEXT_CATEGORY
 
 from langchain_core.callbacks import UsageMetadataCallbackHandler
 from langchain_core.language_models import BaseChatModel
+from langgraph.graph import END, START, StateGraph
+from langgraph.types import Send
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from common.data import DATA
@@ -55,6 +56,17 @@ if TYPE_CHECKING:
     from stage5_insight_detection.bank_analytics.prepare import PreparationOptions as BankPreparationOptions, PreparedBank
 
 
+class _NewsState(TypedDict, total=False):
+    """Per-run state of the news engine (stages 2-6). `rows` keeps the retrieval input order; the Send tasks
+    append out of order, so every fan-out item carries its index and the joins sort by it — the result rows are
+    exactly what the thread-pool implementation produced."""
+    rows: list[dict]
+    assessed: Annotated[list[tuple], operator.add]   # (idx, priority, news, stage4 | error)
+    top: list[tuple]                                  # (pos, priority, news, stage4), ranked
+    judge_rows: Annotated[list[tuple], operator.add]  # (pos, result row)
+    news_results: Annotated[list[dict], operator.add]
+
+
 class InsightPipeline:
     def __init__(self, cheap: BaseChatModel, agent: BaseChatModel, consequences: ConsequenceExtractor | None = None,
                  bank: BankAnalytics | None = None, related: RelatedNews | None = None):
@@ -64,112 +76,173 @@ class InsightPipeline:
         self.bank = bank
         self.judge = InsightJudge(agent, self.related, bank)
         self.writer = InsightWriter(agent)
-        
+        self._graph = None
+        self._params: dict = {}
+        self._run_ctx = contextvars.copy_context()
+
     @pinned_run
     def run(self, company_id: str, role: str, n_candidates: int = 30, n_judge: int = 5,
             retrieval: str = 'v2', workers: int = 1) -> list[dict]:
-        """News are independent: stage 4 and stages 5-6 run in a pool of `workers` threads.
-        workers=1 keeps the call order deterministic for scripted test models."""
+        """LangGraph news engine: stage 4 and stages 5-6 run as parallel `Send` tasks (max_concurrency=workers);
+        the joins rank by the retrieval input index, so workers=1 keeps the call order deterministic for scripted
+        test models exactly as the thread pool did."""
+        self._params = {'company_id': company_id, 'role': role, 'n_judge': n_judge}
+        self._run_ctx = contextvars.copy_context()  # the Langfuse session and the news snapshot travel with every task
+        rows = self._prepare(company_id, role, n_candidates, retrieval)
+        state = self.news_graph().invoke({'rows': rows}, config={'max_concurrency': max(1, workers)})
+        return state['news_results']
+
+    def news_graph(self):
+        """Stages 2-6 as a compiled LangGraph graph (see langgraph-e2e-design.md): prepare is done by run(),
+        assess fans out per news, rank joins, judge+write fans out per top news, collect joins."""
+        if self._graph is None:
+            g = StateGraph(_NewsState)
+            g.add_node('assess_one', self._assess_node)
+            g.add_node('rank', self._rank_node)
+            g.add_node('judge_one', self._judge_node)
+            g.add_node('collect', self._collect_node)
+            g.add_conditional_edges(START, self._fan_assess, ['assess_one', 'rank'])
+            g.add_edge('assess_one', 'rank')
+            g.add_conditional_edges('rank', self._fan_judge, ['judge_one', 'collect'])
+            g.add_edge('judge_one', 'collect')
+            g.add_edge('collect', END)
+            self._graph = g.compile()
+        return self._graph
+
+    @staticmethod
+    def _fan_assess(state: _NewsState) -> list:
+        return [Send('assess_one', {'idx': i, 'news': r}) for i, r in enumerate(state['rows'])] or ['rank']
+
+    @staticmethod
+    def _fan_judge(state: _NewsState) -> list:
+        return [Send('judge_one', {'pos': p, 'priority': pr, 'news': n, 'stage4': s})
+                for p, (pr, n, s) in enumerate(state['top'])] or ['collect']
+
+    def _prepare(self, company_id: str, role: str, n_candidates: int, retrieval: str) -> list[dict]:
         if isinstance(self.related, RelatedNews):
             self.related.refresh()
-        facts = build([company_id], use_profiles=True)[company_id]                 # stage 2
-        key_facts = [f'[{f["cat"]}] {f["text"]}' for f in facts if f['depth'] == 1]
-        # the judge reads every fact through its company_facts tool, so the writer and the audit get all of them too
-        # (with key facts only, the writer's checker rejected group and payment figures the judge had cited: U_68622, 22.10)
-        all_facts = [f'[{f["cat"]}] {f["text"]}' for f in facts]
+        facts = build([company_id], use_profiles=True)[company_id]                     # stage 2
+        self._params.update(facts=facts,
+                            key_facts=[f'[{f["cat"]}] {f["text"]}' for f in facts if f['depth'] == 1],
+                            # the judge reads every fact through its company_facts tool, so the writer and the audit
+                            # get all of them too (key facts only -> the checker rejected group and payment figures)
+                            all_facts=[f'[{f["cat"]}] {f["text"]}' for f in facts])
         shortlist, _ = candidates(company_id, role, top=n_candidates, facts=facts, method=retrieval)  # stage 3
         if isinstance(self.related, RelatedNews) and shortlist.attrs.get(
                 'corpus_fingerprint', corpus_fingerprint(self.related.news)) != corpus_fingerprint(self.related.news):
             raise StaleNewsReferences('News changed during retrieval; restart the batch')
-        scored, results = [], []
+        return shortlist.to_dict('records')
 
-        def record(news: dict, **fields) -> None:
-            result = {'news_id': news['id'], 'title': news['title'], **fields}
-            result['matched_fragments'] = news.get('matched_fragments', [])
-            if 'event_id' in news:
-                result['retrieval'] = {k: news[k] for k in ('event_id', 'event_news_ids', 'generators')}
-            if isinstance(self.related, RelatedNews):
-                result = bind_result(result, self.related.news, allow_unresolved=True)
-            results.append(result)
+    def _task(self, fn, item):
+        """Each task runs in a fresh copy of the run's context: the Langfuse session and the news snapshot live in it."""
+        return self._run_ctx.run(lambda: contextvars.copy_context().run(fn, item))
 
-        def model_error(error: StructuredOutputError, stage: str) -> dict:
-            return {'stage': stage, 'schema': error.schema, 'attempts': error.attempts, 'message': str(error)}
+    def _record(self, news: dict, **fields) -> dict:
+        result = {'news_id': news['id'], 'title': news['title'], **fields}
+        result['matched_fragments'] = news.get('matched_fragments', [])
+        if 'event_id' in news:
+            result['retrieval'] = {k: news[k] for k in ('event_id', 'event_news_ids', 'generators')}
+        if isinstance(self.related, RelatedNews):
+            result = bind_result(result, self.related.news, allow_unresolved=True)
+        return result
 
-        def assess(news: dict) -> tuple:                                           # stage 4
+    @staticmethod
+    def _model_error(error: StructuredOutputError, stage: str) -> dict:
+        return {'stage': stage, 'schema': error.schema, 'attempts': error.attempts, 'message': str(error)}
+
+    def _assess_node(self, item: dict) -> dict:
+        """Stage 4 for one news: (idx, priority, news, stage4) — priority None marks a model error."""
+        idx, news = item['idx'], item['news']
+        p = self._params
+
+        def body(_):
             plausibility = self.related.event_plausibility(news['id'])
             stage = 'relevance'
             try:
-                relevance = self.relevance.score(news, '\n'.join(key_facts), role)
+                relevance = self.relevance.score(news, '\n'.join(p['key_facts']), p['role'])
                 stage = 'consequences'
-                stage4 = {'matched_fragments': news.get('matched_fragments', []), 'relevance': relevance.model_dump(), 'consequences': self.consequences.extract(news),
-                          'plausibility': plausibility}
+                stage4 = {'matched_fragments': news.get('matched_fragments', []), 'relevance': relevance.model_dump(),
+                          'consequences': self.consequences.extract(news), 'plausibility': plausibility}
             except StructuredOutputError as error:
-                return None, news, model_error(error, stage)
+                return None, news, self._model_error(error, stage)
             return relevance.score * (0.5 if plausibility is None else plausibility), news, stage4
 
-        def judge(item: tuple) -> dict:
-            priority, news, stage4 = item
-            result, stage = {'stage4': stage4}, 'judge'
-            try:
-                decision = self.judge.decide(news['id'], company_id, facts, role, stage4)  # stage 5
-                result['decision'] = decision.model_dump()
-                if decision.bank_evidence:
-                    result['judge_bank'] = decision.bank_evidence
-                calculations = decision.calculation_facts
-                if calculations:
-                    result['calculations'] = calculations
-                    result['calculation_bank'] = decision.calculation_bank
-                if decision.is_insight:                                           # stage 6
-                    related = [self.related.get(i) for i in decision.related_news_ids[:3] if i in self.related.row_of]
-                    # Reuse the exact sources read by the judge (hits, neighbours, compared tables).
-                    # A fresh mechanism query is only a fallback when the judge read no bank material.
-                    bank = decision.bank_evidence or (self.bank.search(decision.mechanism) if self.bank else [])
-                    bank = list({b.get('id') or f'bank:{b["report"]}:{b["page"]}': b
-                                 for b in [*bank, *decision.calculation_bank]}.values())
-                    stage = 'writer'
-                    insight, review = self.writer.write(company_id, role, decision.model_dump_json(),
-                                                        Evidence(news=[news, *related], facts=all_facts, bank=bank,
-                                                                 calculations=calculations,
-                                                                 full_bank_ids={b['id'] for b in [*decision.bank_evidence,
-                                                                                                *decision.calculation_bank]}))
-                    result |= {'insight' if review.ok else 'draft': insight.model_dump(),
-                               'review': review.model_dump(), 'status': 'ready' if review.ok else 'review_rejected'}
-                    if review.ok:
-                        from stage5_insight_detection.analyst_loop.audit import audit
-                        from stage5_insight_detection.analyst_loop.verdict import InsightBrief
-                        evidence_facts = [dict(id=f'fact:{i}', value='', unit='', formula='', label=f)
-                                          for i, f in enumerate(all_facts, 1) if facts[i - 1]['cat'] != CONTEXT_CATEGORY]
-                        evidence_facts += [f for f in calculations if f['kind'] == 'fact']
-                        hypotheses = [f for f in calculations if f['kind'] == 'hypothesis']
-                        banks = [dict(b, id=b.get('id') or f'bank:{b["report"]}:{b["page"]}',
-                                      freshness=b.get('freshness', 'stale' if b['stale'] else 'fresh')) for b in bank]
-                        sources = {f'news:{n["id"]}': f'{n["title"]}. {n.get("text", "")}' for n in [news, *related]}
-                        sources |= {b['id']: b['text'] for b in banks}
-                        brief = InsightBrief(refs=[*sources, *[f['id'] for f in evidence_facts + hypotheses]], facts=evidence_facts,
-                            consequences=[], risks=[], bank=banks, hypotheses=hypotheses, impact=insight.impact.model_dump() if insight.impact else
-                                {'level': 'low', 'criteria': 'В режиме judge количественное влияние кодом не рассчитано'},
-                            not_bank_position=not any(b.get('own_view') and b['freshness'] in ('fresh', 'aging') for b in banks), warnings=[])
-                        insight, warnings = audit(insight, brief, sources)
-                        result.update(insight=insight.model_dump(), audit=warnings)
-                        if any(w['code'] in {'unknown_ref', 'no_source'} for w in warnings):
-                            result.update(draft=result.pop('insight'), status='audit_rejected')
-            except StructuredOutputError as error:
-                result.update(status='model_error', error=model_error(error, stage))
-            return result
+        priority, news, out = self._task(body, None)
+        return {'assessed': [(idx, priority, news, out)]}
 
-        def threaded(fn, items):  # each task runs in a copy of this thread's context: the Langfuse session lives there
-            return pool.map(lambda job: job[0].run(fn, job[1]), [(contextvars.copy_context(), x) for x in items])
+    def _rank_node(self, state: _NewsState) -> dict:
+        """Join of the assess fan-out in the retrieval input order; stable ranking = the thread-pool order."""
+        assessed = sorted(state['assessed'], key=lambda t: t[0])
+        error_rows, scored = [], []
+        for idx, priority, news, out in assessed:
+            if priority is None:
+                error_rows.append(self._record(news, status='model_error', error=out))
+            else:
+                scored.append((idx, priority, news, out))
+        top = [t for t in sorted(scored, key=lambda t: (-t[1], t[0]))[:self._params['n_judge']] if t[1] > 0]
+        return {'news_results': error_rows, 'top': [(priority, news, stage4) for _, priority, news, stage4 in top]}
 
-        with ThreadPoolExecutor(max(1, workers)) as pool:
-            for priority, news, out in threaded(assess, shortlist.to_dict('records')):
-                if priority is None:
-                    record(news, status='model_error', error=out)
-                else:
-                    scored.append((priority, news, out))
-            top = [s for s in sorted(scored, key=lambda s: -s[0])[:n_judge] if s[0] > 0]
-            for item, result in zip(top, threaded(judge, top)):
-                record(item[1], **result)
-        return results
+    def _judge_node(self, item: dict) -> dict:
+        """Stages 5-6 for one top news: judge -> writer -> checker -> audit, as one result row."""
+        result, news = self._task(self._judge_body, item)
+        return {'judge_rows': [(item['pos'], self._record(news, **result))]}
+
+    def _judge_body(self, item: dict) -> tuple[dict, dict]:
+        p = self._params
+        company_id, role, facts, all_facts = p['company_id'], p['role'], p['facts'], p['all_facts']
+        news, stage4 = item['news'], item['stage4']
+        result, stage = {'stage4': stage4}, 'judge'
+        try:
+            decision = self.judge.decide(news['id'], company_id, facts, role, stage4)  # stage 5
+            result['decision'] = decision.model_dump()
+            if decision.bank_evidence:
+                result['judge_bank'] = decision.bank_evidence
+            calculations = decision.calculation_facts
+            if calculations:
+                result['calculations'] = calculations
+                result['calculation_bank'] = decision.calculation_bank
+            if decision.is_insight:                                                   # stage 6
+                related = [self.related.get(i) for i in decision.related_news_ids[:3] if i in self.related.row_of]
+                # Reuse the exact sources read by the judge (hits, neighbours, compared tables).
+                # A fresh mechanism query is only a fallback when the judge read no bank material.
+                bank = decision.bank_evidence or (self.bank.search(decision.mechanism) if self.bank else [])
+                bank = list({b.get('id') or f'bank:{b["report"]}:{b["page"]}': b
+                             for b in [*bank, *decision.calculation_bank]}.values())
+                stage = 'writer'
+                insight, review = self.writer.write(company_id, role, decision.model_dump_json(),
+                                                    Evidence(news=[news, *related], facts=all_facts, bank=bank,
+                                                             calculations=calculations,
+                                                             full_bank_ids={b['id'] for b in [*decision.bank_evidence,
+                                                                                            *decision.calculation_bank]}))
+                result |= {'insight' if review.ok else 'draft': insight.model_dump(),
+                           'review': review.model_dump(), 'status': 'ready' if review.ok else 'review_rejected'}
+                if review.ok:
+                    from stage5_insight_detection.analyst_loop.audit import audit
+                    from stage5_insight_detection.analyst_loop.verdict import InsightBrief
+                    evidence_facts = [dict(id=f'fact:{i}', value='', unit='', formula='', label=f)
+                                      for i, f in enumerate(all_facts, 1) if facts[i - 1]['cat'] != CONTEXT_CATEGORY]
+                    evidence_facts += [f for f in calculations if f['kind'] == 'fact']
+                    hypotheses = [f for f in calculations if f['kind'] == 'hypothesis']
+                    banks = [dict(b, id=b.get('id') or f'bank:{b["report"]}:{b["page"]}',
+                                  freshness=b.get('freshness', 'stale' if b['stale'] else 'fresh')) for b in bank]
+                    sources = {f'news:{n["id"]}': f'{n["title"]}. {n.get("text", "")}' for n in [news, *related]}
+                    sources |= {b['id']: b['text'] for b in banks}
+                    brief = InsightBrief(refs=[*sources, *[f['id'] for f in evidence_facts + hypotheses]], facts=evidence_facts,
+                        consequences=[], risks=[], bank=banks, hypotheses=hypotheses,
+                        impact=insight.impact.model_dump() if insight.impact else
+                            {'level': 'low', 'criteria': 'В режиме judge количественное влияние кодом не рассчитано'},
+                        not_bank_position=not any(b.get('own_view') and b['freshness'] in ('fresh', 'aging') for b in banks), warnings=[])
+                    insight, warnings = audit(insight, brief, sources)
+                    result.update(insight=insight.model_dump(), audit=warnings)
+                    if any(w['code'] in {'unknown_ref', 'no_source'} for w in warnings):
+                        result.update(draft=result.pop('insight'), status='audit_rejected')
+        except StructuredOutputError as error:
+            result.update(status='model_error', error=self._model_error(error, stage))
+        return result, news
+
+    def _collect_node(self, state: _NewsState) -> dict:
+        rows = [row for _, row in sorted(state['judge_rows'], key=lambda t: t[0])]
+        return {'news_results': rows}
 
 
 @pinned_run
@@ -273,6 +346,65 @@ def budget_arg(value: str) -> float:
     return result
 
 
+class E2EState(_NewsState, total=False):
+    company_id: str
+    role: str
+    n_candidates: int
+    n_judge: int
+    retrieval: str
+    workers: int
+    analytics: object          # AnalysisRun | None of the parallel bank-analytics branch
+    analytics_error: str
+    results: list[dict]        # final rows: news (contract v2) + analytics within the quota
+    out: str
+
+
+def build_e2e_graph(pipe: InsightPipeline, *, with_analytics: bool, run_analytics_fn, analytics_rows_fn, migrate_fn,
+                    save_fn):
+    """The full judge-engine E2E as one LangGraph graph (langgraph-e2e-design.md): the news engine (itself a graph)
+    and the bank-analytics branch start together and join at `merge`; `save` is the last node. The CLI injects its
+    own callables, so the graph also runs in tests with plain functions."""
+    g = StateGraph(E2EState)
+
+    def news_engine(s: E2EState) -> dict:
+        return {'news_results': pipe.run(s['company_id'], s['role'], s['n_candidates'], s['n_judge'],
+                                         retrieval=s['retrieval'], workers=s['workers'])}
+
+    def analytics_node(s: E2EState) -> dict:
+        run, error = run_analytics_fn()
+        return {'analytics': run, 'analytics_error': error}
+
+    def merge(s: E2EState) -> dict:
+        results = [migrate_fn(r) for r in s['news_results']]  # contract v2 (a superset of the old one)
+        return {'results': results + (analytics_rows_fn(s['analytics'], s['analytics_error'], results)
+                                      if with_analytics else [])}
+
+    def save(s: E2EState) -> dict:
+        return {'out': save_fn(s['results'])}
+
+    g.add_node('news_engine', news_engine)
+    g.add_node('merge', merge)
+    g.add_node('save', save)
+    g.add_edge(START, 'news_engine')
+    if with_analytics:
+        g.add_node('analytics', analytics_node)
+        g.add_edge(START, 'analytics')  # parallel branch, joins at merge
+        g.add_edge('analytics', 'merge')
+    g.add_edge('news_engine', 'merge')
+    g.add_edge('merge', 'save')
+    g.add_edge('save', END)
+    return g.compile()
+
+
+def _save_results(company_id: str, role: str, source_news, rows: list[dict]):
+    out = DATA / 'insights' / f'{company_id}_{role}.json'
+    out.parent.mkdir(parents=True, exist_ok=True)
+    if corpus_fingerprint(source_news) != corpus_fingerprint(news_pool()):
+        raise StaleNewsReferences('News changed while the pipeline was running; restart the batch before saving')
+    save_results(out, rows, source_news, DATA / 'news')
+    return out
+
+
 if __name__ == '__main__':
     ap = argparse.ArgumentParser()
     ap.add_argument('company_id')
@@ -339,31 +471,36 @@ if __name__ == '__main__':
             from stage5_insight_detection.bank_analytics.prepare import prepare_bank
             prepared_bank = prepare_bank(preparation, models)
         bank = optional_bank() if a.source != 'news' or a.engine == 'judge' else None
-        analytics = None
-        if a.source != 'news':  # in parallel with the news engines: the Langfuse session lives in the copied context
-            analytics = ThreadPoolExecutor(1)
-            future = analytics.submit(contextvars.copy_context().run, lambda: run_analytics(
+        if a.source == 'analytics':
+            run, error = contextvars.copy_context().run(lambda: run_analytics(
                 a.company_id, a.role, models, cache_only=a.analytics_cache_only, refresh=a.analytics_refresh,
                 strict=a.analytics_strict_cache, bank=bank))
-        if a.source == 'analytics':
-            results = []
+            results = analytics_rows(run, error, [], a.analytics_share, a.analytics_cache_only)
+            out = _save_results(a.company_id, a.role, source_news, results)
         elif a.engine == 'loop':
             results = run_loop(a.company_id, a.role, models, a.candidates, a.judge, retrieval=a.retrieval,
                                bank_review=a.bank_review, bank_budget=a.bank_budget, preparation=preparation,
                                prepared_bank=prepared_bank)
-        else:
-            results = InsightPipeline(models.cheap(), models.agent(), bank=bank).run(
-                a.company_id, a.role, a.candidates, a.judge, retrieval=a.retrieval, workers=a.workers)
-        results = [migrate_result(r, a.company_id) for r in results]  # contract v2 (a superset of the old one)
-        if analytics is not None:
-            run, error = future.result()
-            analytics.shutdown()
-            results += analytics_rows(run, error, results, a.analytics_share, a.analytics_cache_only)
-        out = DATA / 'insights' / f'{a.company_id}_{a.role}.json'
-        out.parent.mkdir(parents=True, exist_ok=True)
-        if corpus_fingerprint(source_news) != corpus_fingerprint(news_pool()):
-            raise StaleNewsReferences('News changed while the pipeline was running; restart the batch before saving')
-        save_results(out, results, source_news, DATA / 'news')
+            results = [migrate_result(r, a.company_id) for r in results]  # contract v2 (a superset of the old one)
+            out = _save_results(a.company_id, a.role, source_news, results)
+        else:  # judge engine: the whole E2E is one LangGraph graph, the analytics branch runs in parallel with the news
+            def _run_analytics():
+                return contextvars.copy_context().run(lambda: run_analytics(
+                    a.company_id, a.role, models, cache_only=a.analytics_cache_only, refresh=a.analytics_refresh,
+                    strict=a.analytics_strict_cache, bank=bank))
+
+            graph = build_e2e_graph(
+                InsightPipeline(models.cheap(), models.agent(), bank=bank),
+                with_analytics=a.source == 'both',
+                run_analytics_fn=_run_analytics,
+                analytics_rows_fn=lambda run, error, rows: analytics_rows(run, error, rows, a.analytics_share,
+                                                                         a.analytics_cache_only),
+                migrate_fn=lambda r: migrate_result(r, a.company_id),
+                save_fn=lambda rows: _save_results(a.company_id, a.role, source_news, rows))
+            state = graph.invoke({'company_id': a.company_id, 'role': a.role, 'n_candidates': a.candidates,
+                                  'n_judge': a.judge, 'retrieval': a.retrieval, 'workers': a.workers},
+                                 config={'max_concurrency': max(1, a.workers)})
+            results, out = state['results'], state['out']
         print(f'{out}: {sum("insight" in r for r in results)} insights, '
               f'{sum(r.get("status") == "model_error" for r in results)} model errors, '
               f'{sum(r.get("source") == "bank_analytics" and "insight" in r for r in results)} from the bank analytics, '
