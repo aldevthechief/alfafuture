@@ -18,12 +18,12 @@ from common.news_corpus import bind_result, referenced_news_ids, result_referenc
 from common.news_evidence import verify_claim_evidence
 from common.trace import AgentTrace
 from stage2_company_facts.profile.integration import CompanyInputs
-from stage5_insight_detection.analyst_loop import bank_run, grounds, impact
+from stage5_insight_detection.analyst_loop import grounds, impact
 from stage5_insight_detection.analyst_loop.compute import compute
 from stage5_insight_detection.analyst_loop.data_requests import DataRequest
 from stage5_insight_detection.analyst_loop.dossier import Dossier
 from stage5_insight_detection.analyst_loop.event import EventCard
-from stage5_insight_detection.analyst_loop.loop import AnalystLoop, bank_insights
+from stage5_insight_detection.analyst_loop.loop import AnalystLoop
 from stage5_insight_detection.analyst_loop.pool import EmptyNewsPool
 from stage5_insight_detection.analyst_loop.profile import CompanyProfile
 from stage5_insight_detection.analyst_loop.verdict import decide

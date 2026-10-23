@@ -304,7 +304,6 @@ if __name__ == '__main__':
     ap.add_argument('--bank-review', action='store_true', help='loop: additionally filter bank fragments with the bank analyst agent')
     ap.add_argument('--bank-budget', type=float, default=None, help='bank reviewer budget in rubles for this run')
     a = ap.parse_args()
-    validate_sources(ap, a)
     do_charts, do_tables, do_digest = a.bank_charts or a.bank_prepare, a.bank_tables or a.bank_prepare, a.bank_digest or a.bank_prepare
     prepare_requested = do_charts or do_tables or do_digest
     if prepare_requested and a.engine != 'loop':

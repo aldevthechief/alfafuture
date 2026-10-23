@@ -183,13 +183,5 @@ class ContractMigrationTests(unittest.TestCase):
         self.assertEqual(v2.from_v1(old, 'company').origin, 'bank')
 
 
-class SourceChoiceTests(unittest.TestCase):
-    def test_the_main_analytics_agent_remains_available_with_either_engine(self):
-        for engine in ('judge', 'loop'):
-            for source in ('news', 'analytics', 'both'):
-                pipeline.validate_sources(argparse.ArgumentParser(), SimpleNamespace(
-                    engine=engine, source=source, bank_insights=False))
-
-
 if __name__ == '__main__':
     unittest.main()
