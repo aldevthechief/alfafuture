@@ -14,6 +14,11 @@ charts already done are skipped, so a stopped run goes on where it stopped.
 python -X utf8 stage5_insight_detection/bank_analytics/charts.py Inflation_tracker_02.pdf:2 Бонд_Бриф_14092026.pdf:4 [--model qwen|gemma] [--budget 1.5]
 python -X utf8 stage5_insight_detection/bank_analytics/charts.py --all --ground qwen --model gemma --budget 8   (every page with a [График] block)
 python -X utf8 stage5_insight_detection/bank_analytics/charts.py --recode --model gemma   (the code part again, free)
+`--charts selective` (or env BANK_CHARTS) pays only for charts that may say what the text does not
+(chart_novelty.block_plan: the page OCR's block against the caption, the «см Рис.N» references and the paragraphs about
+the same indicator): pages with a forecast go first, then new values, then indicators the text never names, so a budget
+stop drops the least important; a page with nothing new gets no box call, a crop whose title matches a block judged not
+new is not read. `--charts all` (default) reads every chart, `--charts off` none.
 """
 import argparse, base64, json, re, sys, time
 from pathlib import Path
@@ -26,6 +31,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from common.llm import ChatModels
 from stage5_insight_detection.bank_analytics.digest import BudgetExceeded, CostMeter
 
+from stage5_insight_detection.bank_analytics import chart_novelty
 from stage5_insight_detection.bank_analytics.chart_reading import measure
 from stage5_insight_detection.bank_analytics.digitize import groups, snap_box, to_png, to_rgb
 from stage5_insight_detection.bank_analytics.ocr import PDF_DIR, PROMPTS
@@ -223,15 +229,28 @@ def crops(pdf: Path, page: int, boxes: list[dict], out_dir: Path = CHART_DIR) ->
 def read_pages(pages: list[tuple[str, int]], *, pdf_dir: Path = PDF_DIR, out_dir: Path = CHART_DIR,
                model: str = 'gemma', ground: str = 'qwen', budget: float | None = None,
                callbacks: list | None = None, reader: ChartReader | None = None,
-               boxes_only: bool = False, only: list[str] | None = None) -> dict:
-    """Reusable chart stage for the standalone command and pipeline; successful crops are cached immediately."""
-    result = {'pages': len(pages), 'charts': 0, 'cached_charts': 0, 'errors': []}
-    if not pages:
+               boxes_only: bool = False, only: list[str] | None = None, charts: str | None = None) -> dict:
+    """Reusable chart stage for the standalone command and pipeline; successful crops are cached immediately.
+    `charts` (chart_novelty.MODES, default env BANK_CHARTS or all): selective reads only what may be new, forecast
+    pages first; off reads nothing."""
+    mode = chart_novelty.mode_of(charts)
+    result = {'pages': len(pages), 'charts': 0, 'cached_charts': 0, 'errors': [], 'skipped_charts': 0}
+    if not pages or mode == 'off':
         return result
+    pdf_of = lambda stem: pdf_dir / (stem if stem.endswith('.pdf') else f'{stem}.pdf')
+    plans = {}
+    if mode == 'selective':  # forecasts first: a stop on the budget drops the least important pages
+        for stem in {s for s, _ in pages}:
+            plans[stem] = chart_novelty.block_plan(pdf_of(stem))
+        pages = sorted(pages, key=lambda sp: chart_novelty.page_priority(plans[sp[0]].get(sp[1])))
     reader = reader or ChartReader(model, budget, ground, callbacks=callbacks)
     from stage5_insight_detection.bank_analytics.assets import prepare
     for stem, page in pages:
-        pdf = pdf_dir / (stem if stem.endswith('.pdf') else f'{stem}.pdf')
+        pdf = pdf_of(stem)
+        blocks = plans[stem].get(page) if mode == 'selective' else None
+        if blocks and not any(b['new'] for b in blocks) and not (out_dir / f'{pdf.stem}_p{page}.boxes.json').exists():
+            result['skipped_charts'] += len(blocks)  # selective: the text has what its charts hold, no box call
+            continue
         prepare(pdf, out_dir, PROMPTS.render('chart_boxes') + PROMPTS.render('ocr_chart') + CROP_VERSION)
         box_file = out_dir / f'{pdf.stem}_p{page}.boxes.json'
         boxes = json.loads(box_file.read_text(encoding='utf-8')) if box_file.exists() else None
@@ -254,6 +273,9 @@ def read_pages(pages: list[tuple[str, int]], *, pdf_dir: Path = PDF_DIR, out_dir
             name = f'{pdf.stem}_p{page}_{n}.png'
             if only is None and name in records and records[name].get('crop_version') == CROP_VERSION and valid_answer('ocr_chart', records[name].get('read')):
                 result['cached_charts'] += 1
+                continue
+            if mode == 'selective' and only is None and not chart_novelty.worth_reading(box.get('title') or '', blocks):
+                result['skipped_charts'] += 1  # its title matches a block whose numbers the text already gives
                 continue
             path = out_dir / name
             png = render(pdf, page, DPI, box['bbox'], sides=sides[n - 1])
@@ -283,7 +305,13 @@ if __name__ == '__main__':
     ap.add_argument('--only', nargs='*', default=None, help='chart numbers on the page to read, e.g. 2 6')
     ap.add_argument('--recode', action='store_true', help='redo the code part (Tesseract, scale, bars, pies, lines) of every '
                                                          'stored reading of --model; no model calls')
+    ap.add_argument('--charts', choices=chart_novelty.MODES, default=None,
+                    help='all: read every chart; selective: only charts with what the text lacks, forecasts first; '
+                         'off: none (default env BANK_CHARTS or all)')
     a = ap.parse_args()
+    if chart_novelty.mode_of(a.charts) == 'off' and not a.recode:
+        print('charts: mode off, nothing is read')
+        sys.exit()
     if a.recode:
         for out in sorted(CHART_DIR.glob(f'*.{a.model}.json')):
             records = json.loads(out.read_text(encoding='utf-8'))
@@ -300,7 +328,9 @@ if __name__ == '__main__':
         pages = sorted({f'{f.file}:{f.page}' for f in lib.fragments if f.kind == 'chart'})
     selected = [(name, int(n)) for name, n in (spec.rsplit(':', 1) for spec in pages)]
     try:
-        read_pages(selected, reader=reader, model=a.model, boxes_only=a.boxes_only, only=a.only)
+        result = read_pages(selected, reader=reader, model=a.model, boxes_only=a.boxes_only, only=a.only, charts=a.charts)
     except BudgetExceeded as error:
         print(error)
-    print(f'spent {reader.meter.cost:.2f} ₽, {len(reader.calls)} calls, {sum(c["sec"] for c in reader.calls):.0f} s')
+        result = {}
+    print(f'spent {reader.meter.cost:.2f} ₽, {len(reader.calls)} calls, {sum(c["sec"] for c in reader.calls):.0f} s'
+          + (f', {result["skipped_charts"]} charts skipped (selective)' if result.get('skipped_charts') else ''))

@@ -724,6 +724,22 @@ def page_of(record: dict) -> str:
     return m.group(1) if m else '?'
 
 
+def chart_points(record: dict, sure: list[tuple] | None = None) -> list[tuple[str, str, str]]:
+    """Every point of a chart as (series, x, value as text): the printed labels confirmed first, then what the code
+    measured on the lines and bars («≈ N»)."""
+    dg, bars = record.get('digitized') or {}, (record.get('code') or {}).get('bars') or {}
+    sure = checked_labels(record)[0] if sure is None else sure
+    points = [(n, str(xv), str(v)) for n, xv, v, _ in sure]
+    seen = {(n, x) for n, x, _ in points}
+    for s in (dg.get('series') or []) if dg.get('ok') else []:
+        points += [(s['name'], x, '≈ ' + fmt_num(v)) for x, v in zip(dg.get('x_labels') or [], s.get('values') or [])
+                   if v is not None and (s['name'], x) not in seen]
+    for s in bars.get('series') or []:
+        points += [(s['name'], str(c), '≈ ' + fmt_num(v)) for c, v in zip(bars.get('categories') or [], s.get('values') or [])
+                   if v is not None and (s['name'], str(c)) not in seen and not any(str(c) == x for _, x, _ in points)]
+    return points
+
+
 def describe(record: dict) -> str:
     """The chart in words, written by code from what was confirmed or measured: what it shows (title, units, period,
     source), each series' last point, direction, minimum and maximum with dates, bars by size. A number the code only
@@ -785,15 +801,7 @@ def describe(record: dict) -> str:
             said.add(name)
     if len(parts) == 1:
         parts.append(f'Значения на графике не подтверждены: см. PDF, стр. {page_of(record)}.')
-    points = [(n, str(xv), str(v)) for n, xv, v, _ in sure]  # printed and confirmed first, then measured (≈)
-    seen = {(n, x) for n, x, _ in points}
-    for s in (dg.get('series') or []) if dg.get('ok') else []:
-        points += [(s['name'], x, '≈ ' + fmt_num(v)) for x, v in zip(dg.get('x_labels') or [], s.get('values') or [])
-                   if v is not None and (s['name'], x) not in seen]
-    for s in bars.get('series') or []:
-        points += [(s['name'], str(c), '≈ ' + fmt_num(v)) for c, v in zip(bars.get('categories') or [], s.get('values') or [])
-                   if v is not None and (s['name'], str(c)) not in seen and not any(str(c) == x for _, x, _ in points)]
-    when, ahead = forecast_points(record, points)
+    when, ahead = forecast_points(record, chart_points(record, sure))
     if ahead:
         parts.append(f'ПРОГНОЗ (периоды позже даты отчёта{" " + when if when else ""} или помеченные как прогноз): ' +
                      '; '.join(f'{n + " — " if n else ""}{x}: {v}' for n, x, v in ahead[:24]) + '.')

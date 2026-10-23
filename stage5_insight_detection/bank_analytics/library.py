@@ -32,6 +32,7 @@ from common.search import StemIndex
 from stage5_insight_detection.bank_analytics.ocr import OCR_DIR, OCR_FULL_DIR, PDF_DIR
 from stage5_insight_detection.bank_analytics.digitize import PHANTOM, annotate, page_grounded, page_records
 from stage5_insight_detection.bank_analytics import tables as table_reading
+from stage5_insight_detection.bank_analytics import chart_novelty
 from stage5_insight_detection.bank_analytics.pages import CHART_BLOCK, clean_page
 from stage5_insight_detection.bank_analytics.search import REPORTS, paragraphs
 
@@ -332,23 +333,40 @@ def page_texts(pdf: Path, ocr_dir: Path = OCR_DIR, ocr=None) -> list[str]:
     return layer
 
 
-def best_pages(pdf: Path, full_dir: Path = OCR_FULL_DIR, ocr_dir: Path = OCR_DIR, ocr=None, report_year: int | None = None) -> list[str]:
+def best_pages(pdf: Path, full_dir: Path = OCR_FULL_DIR, ocr_dir: Path = OCR_DIR, ocr=None, report_year: int | None = None,
+               charts: str | None = None) -> list[str]:
     """Text layer if present; else the full OCR run cleaned, with the old run under pages where the full one broke
     (pages.clean_page, the same as export_text.py), the charts read crop by crop where charts.py ran
-    (digitize.annotate) and the tables read three times and reconciled where tables.py ran; else the old run."""
+    (digitize.annotate) and the tables read three times and reconciled where tables.py ran; else the old run.
+    `charts` (chart_novelty.MODES, default env BANK_CHARTS or all): selective keeps only the charts that may say what
+    the report's text does not, off keeps none; a dropped chart leaves no line for the agent."""
     old = page_texts(pdf, ocr_dir, ocr)
     main = page_texts(pdf, full_dir) if (full_dir / f'{pdf.stem}.jsonl').exists() else old
-    return [prepare_page(pdf, n, raw, fallback, report_year)[0]
-            for n, (raw, fallback) in enumerate(zip(main, old), 1)]
+    report = chart_report(pdf, main, old, report_year, charts)
+    pages = [prepare_page(pdf, n, raw, fallback, report_year, charts, report)[0]
+             for n, (raw, fallback) in enumerate(zip(main, old), 1)]
+    return ['\n'.join(ln for ln in p.split('\n') if not ln.startswith(chart_novelty.SKIPPED)) for p in pages]
 
 
-def prepare_page(pdf: Path, n: int, raw: str, fallback: str = '', report_year: int | None = None):
-    """One preparation path for fragments and the Markdown used by report digests."""
+def chart_report(pdf: Path, main: list[str], old: list[str], report_year: int | None, charts: str | None = None):
+    """The report's cleaned text for chart_novelty under `selective`; None for the other modes."""
+    if chart_novelty.mode_of(charts) != 'selective':
+        return None
+    return chart_novelty.Report(pdf.stem, [clean_page(raw, fallback, report_year)[0] for raw, fallback in zip(main, old)])
+
+
+def prepare_page(pdf: Path, n: int, raw: str, fallback: str = '', report_year: int | None = None, mode: str | None = None,
+                 report: 'chart_novelty.Report | None' = None):
+    """One preparation path for fragments and the Markdown used by report digests. `mode` and `report`: which charts
+    are kept (chart_novelty.select; selective needs the report from chart_report)."""
     charts = pdf.parent / 'charts'
     from stage5_insight_detection.bank_analytics.assets import current
     text, stats = clean_page(raw, fallback, report_year)
-    if current(pdf, charts):
-        text = annotate(text, page_records(pdf.stem, n, charts), page_grounded(pdf.stem, n, charts))
+    fresh = current(pdf, charts)
+    text, records = chart_novelty.select(text, page_records(pdf.stem, n, charts) if fresh else [], report, n,
+                                         chart_novelty.mode_of(mode))
+    if fresh:
+        text = annotate(text, records, page_grounded(pdf.stem, n, charts))
     tables = pdf.parent / 'tables'
     return table_reading.replace_tables(text, table_reading.page_records(pdf.stem, n, tables) if current(pdf, tables) else None), stats
 
@@ -615,8 +633,10 @@ class BankLibrary:
 
     @classmethod
     def refresh(cls, pdf_dir: Path = PDF_DIR, ocr_dir: Path = OCR_DIR, as_of: date | None = None, ocr=None,
-                out: Path = FRAGMENTS, registry: Path = REGISTRY, full_dir: Path = OCR_FULL_DIR, rebuild: bool = False) -> 'BankLibrary':
+                out: Path = FRAGMENTS, registry: Path = REGISTRY, full_dir: Path = OCR_FULL_DIR, rebuild: bool = False,
+                charts: str | None = None) -> 'BankLibrary':
         as_of = as_of or date.today()
+        mode = chart_novelty.mode_of(charts)
         known = json.loads(registry.read_text(encoding='utf-8')) if registry.exists() and not rebuild else {}  # rebuild: parser changed
         old = cls.load(out, as_of).fragments if out.exists() and not rebuild else []
         by_file = {r['file']: r for r in REPORTS}
@@ -629,7 +649,8 @@ class BankLibrary:
             assets += sorted((pdf_dir / 'charts').glob(f'{pdf.stem}_p*.json'))
             assets += sorted((pdf_dir / 'tables').glob(f'{pdf.stem}_p*.json'))
             assets += [pdf_dir / folder / f'{pdf.stem}.source.json' for folder in ('charts', 'tables')]
-            version = json.dumps([PARSER_VERSION, by_file.get(pdf.name), as_of.year], sort_keys=True)
+            version = json.dumps([PARSER_VERSION, by_file.get(pdf.name), as_of.year] + ([] if mode == 'all' else [mode]),
+                                 sort_keys=True)
             return hashlib.sha256((file_hash(pdf, *assets) + version).encode()).hexdigest()
         for pdf in pdfs:
             h = signature(pdf)
@@ -638,7 +659,7 @@ class BankLibrary:
             keep = [f for f in keep if f.file != pdf.name]
             meta = by_file.get(pdf.name) or {}
             when = date.fromisoformat(meta['date']) if meta.get('date') else date_from_name(pdf.name, as_of.year)
-            fresh += parse_report(pdf.name, best_pages(pdf, full_dir, ocr_dir, ocr, when.year if when else None), meta, as_of)
+            fresh += parse_report(pdf.name, best_pages(pdf, full_dir, ocr_dir, ocr, when.year if when else None, mode), meta, as_of)
             known[pdf.name] = signature(pdf)  # optional OCR may have written new pages
         lib = cls(keep + fresh)
         lib.save(out)
@@ -679,12 +700,15 @@ if __name__ == '__main__':
     ap.add_argument('--as-of', type=date.fromisoformat, default=None)
     ap.add_argument('--rebuild', action='store_true', help='parse every PDF again (after a change of the parser)')
     ap.add_argument('--search', default='')
+    ap.add_argument('--charts', choices=chart_novelty.MODES, default=None,
+                    help='all: every chart; selective: only charts with what the text lacks; off: none (default env BANK_CHARTS or all)')
     a = ap.parse_args()
     if a.search:
         for f, s in BankLibrary.load(as_of=a.as_of).search(a.search):
             print(f'{s:.3f} {f.id} {f.date} {f.freshness}{" OWN" if f.own_view else ""} {f.topics}\n  {f.text[:250]}')
     else:
         from stage5_insight_detection.bank_analytics.ocr import AnalyticsOCR
-        lib = BankLibrary.refresh(as_of=a.as_of, ocr=AnalyticsOCR() if a.ocr else None, rebuild=a.rebuild)
-        print(f'{FRAGMENTS}: {len(lib.fragments)} fragments, {sum(f.own_view for f in lib.fragments)} with the bank\'s own view, '
+        lib = BankLibrary.refresh(as_of=a.as_of, ocr=AnalyticsOCR() if a.ocr else None, rebuild=a.rebuild, charts=a.charts)
+        print(f'{FRAGMENTS}: {len(lib.fragments)} fragments ({sum(f.kind == "chart" for f in lib.fragments)} charts, mode '
+              f'{chart_novelty.mode_of(a.charts)}), {sum(f.own_view for f in lib.fragments)} with the bank\'s own view, '
               f'{sum(not f.text.strip() for f in lib.fragments)} empty')
