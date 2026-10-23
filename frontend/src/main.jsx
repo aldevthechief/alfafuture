@@ -1,0 +1,279 @@
+// Our widgets inside the cabinet shell (index.html), client's point of view: one-line home block, «Инсайты» page
+// (feed, company profile with HITL questions) and the insight panel.
+// The shell owns company/role (window.demoContext, event 'demo:context'); data comes from public/feed.json.
+import React, { useEffect, useState } from 'react';
+import { createRoot } from 'react-dom/client';
+import { createPortal } from 'react-dom';
+import { Button } from '@alfalab/core-components/button';
+import { Status } from '@alfalab/core-components/status';
+import { Tag } from '@alfalab/core-components/tag';
+import { Tabs, Tab } from '@alfalab/core-components/tabs';
+import { SidePanel } from '@alfalab/core-components/side-panel';
+import { Typography } from '@alfalab/core-components/typography';
+import { Input } from '@alfalab/core-components/input';
+import { Plate } from '@alfalab/core-components/plate';
+import './insights.css';
+
+const CONFIDENCE = { high: ['green', 'Уверенность высокая'], medium: ['orange', 'Уверенность средняя'], low: ['grey', 'Уверенность низкая'] };
+// feedback reason → pipeline stage it is routed to
+const REASONS = [['Не про нас', 'profile'], ['Уже знали', 'ranker'], ['Старая новость', 'news_search'], ['Ошибка в фактах', 'writer']];
+const TRACE = { plan: 'План', tool: 'Данные', check: 'Проверка' };
+const date = s => new Date(s).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
+const time = s => new Date(s).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+const Title = props => <Typography.Title font="system" {...props} />;
+// shortcut: feedback and profile answers only go to the console until the pipeline has an endpoint for them
+const send = (kind, payload) => console.info(kind, payload);
+
+function useCtx() {
+  const [ctx, setCtx] = useState(window.demoContext);
+  useEffect(() => {
+    const on = e => setCtx({ ...e.detail });
+    window.addEventListener('demo:context', on);
+    return () => window.removeEventListener('demo:context', on);
+  }, []);
+  return ctx;
+}
+
+function App() {
+  const ctx = useCtx();
+  const [data, setData] = useState(null);
+  const [open, setOpen] = useState(null);
+  const [hidden, setHidden] = useState([]);
+  const [answers, setAnswers] = useState({}); // company id → hypothesis id → {verdict, text}
+  useEffect(() => { fetch('feed.json').then(r => r.json()).then(setData); }, []);
+  if (!data) return null;
+
+  const company = data.companies[ctx.company];
+  const feed = company?.feeds[ctx.role];
+  const role = data.roles.find(r => r.id === ctx.role)?.name;
+  const visible = (feed?.insights || []).filter(i => !hidden.includes(i.id));
+  const hide = id => { setHidden(h => [...h, id]); setOpen(null); };
+  const answer = (hid, a) => {
+    send('profile_answer', { company: ctx.company, hypothesis: hid, ...a });
+    setAnswers(all => ({ ...all, [ctx.company]: { ...all[ctx.company], [hid]: a } }));
+  };
+  const slot = id => document.getElementById(id);
+
+  return <>
+    {createPortal(<HomeWidget insights={visible} onOpen={setOpen} />, slot('insights-widget'))}
+    {createPortal(<Page {...{ company, feed, role, visible, hidden, answers: answers[ctx.company] || {}, answer, onOpen: setOpen, onRestore: () => setHidden([]) }} />, slot('insights-page'))}
+    <InsightPanel insight={open} sources={data.sources} onClose={() => setOpen(null)} onHide={hide} />
+  </>;
+}
+
+// home: one line with the top-1 insight, like the payment-statuses row next to it (criterion 08)
+function HomeWidget({ insights, onOpen }) {
+  const top = insights[0];
+  return <div className="card iw">
+    <b className="iw-label">Инсайты</b>
+    {top
+      ? <button className="iw-top" onClick={() => onOpen(top)} title={top.title}>{top.title}</button>
+      : <span className="iw-top iw-none">Сейчас нет важных для вас событий</span>}
+    <Button size={32} view="secondary" onClick={() => window.showView('insights')}>
+      Больше инсайтов{insights.length > 1 ? ` · ${insights.length}` : ''}</Button>
+  </div>;
+}
+
+function Page({ company, feed, role, visible, hidden, answers, answer, onOpen, onRestore }) {
+  const [tab, setTab] = useState('feed');
+  const [filter, setFilter] = useState('all');
+  const channels = [...new Set(visible.map(i => i.channel))];
+  const shown = visible.filter(i => filter === 'all' || (filter === 'risks' ? i.risks.length : filter === 'opps' ? i.opportunities.length : i.channel === filter));
+  const questions = company ? company.profile.hypotheses.filter(h => !answers[h.id]).length : 0;
+  return <div className="ip">
+    <h1 className="h-sys">Инсайты</h1>
+    <p className="h-sub">Что в новостях важно для {company?.profile.name} · {role}{feed && ` · обновлено сегодня в ${time(feed.computed_at)}`}</p>
+    <Tabs selectedId={tab} onChange={(_, { selectedId }) => setTab(selectedId)} size="s">
+      <Tab id="feed" title="События для вас">
+        <div className="ip-filters">
+          {[['all', 'Все'], ['risks', 'Риски'], ['opps', 'Возможности'], ...channels.map(c => [c, c])].map(([id, t]) =>
+            <Tag key={id} size={32} checked={filter === id} onClick={() => setFilter(id)}>{t}</Tag>)}
+        </div>
+        {shown.map(i => <InsightCard key={i.id} insight={i} onOpen={onOpen} />)}
+        {!shown.length && <p className="ip-empty">Сейчас нет событий, важных для вашей роли.</p>}
+        {hidden.length > 0 && <Button view="text" size={32} onClick={onRestore}>Показать скрытые ({hidden.length})</Button>}
+      </Tab>
+      <Tab id="profile" title="Профиль компании" rightAddons={questions > 0 && <Status color="blue" size={20}>{questions}</Status>}>
+        <Profile profile={company?.profile} answers={answers} onAnswer={answer} />
+      </Tab>
+    </Tabs>
+    <p className="ip-disclaimer">Сформировано AI на основе открытых новостей и аналитики Альфа-Банка. Не является инвестиционной рекомендацией.</p>
+  </div>;
+}
+
+function InsightCard({ insight: i, onOpen }) {
+  const [color, conf] = CONFIDENCE[i.confidence];
+  return <button className="card ic" onClick={() => onOpen(i)}>
+    <div className="ic-tags">
+      <Status color="blue" size={20}>{i.channel}</Status>
+      <Status color={color} size={20}>{conf}</Status>
+      {i.bank_view.length > 0 && <Status color="purple" size={20}>Есть позиция Банка</Status>}
+      <span className="ic-date">{date(i.published)}</span>
+    </div>
+    <Title tag="h3" view="small" weight="bold">{i.title}</Title>
+    <Typography.Text view="primary-medium" color="secondary" tag="p">{i.why_it_matters[0]?.text}</Typography.Text>
+    <Typography.Text view="primary-small" weight="medium" tag="p">Почему сейчас: {i.why_now}</Typography.Text>
+  </button>;
+}
+
+// layers are visually separate (criterion 02): facts / bank view / AI conclusions / hypotheses
+function Layer({ kind, label, claims, sources }) {
+  if (!claims?.length) return null;
+  return <section className={`layer layer-${kind}`}>
+    <Typography.Text view="caps" weight="bold" tag="div">{label}</Typography.Text>
+    <ul>{claims.map((c, n) => <li key={n}>{c.text}<SourceRefs ids={c.sources} sources={sources} /></li>)}</ul>
+  </section>;
+}
+
+function SourceRefs({ ids, sources }) {
+  return <span className="refs">{ids.map(id => {
+    const s = sources[id];
+    const label = s?.kind === 'fact' ? 'данные компании' : s ? `${s.outlet || s.title}${s.page ? `, с. ${s.page}` : ''}` : id;
+    return <a key={id} href={`#src-${id}`} className={`ref ref-${s?.kind}`}>{label}</a>;
+  })}</span>;
+}
+
+function InsightPanel({ insight: i, sources, onClose, onHide }) {
+  const [vote, setVote] = useState(null);
+  const [reason, setReason] = useState(null);
+  const [q, setQ] = useState('');
+  const [qa, setQa] = useState([]);
+  const [called, setCalled] = useState(false);
+  useEffect(() => { setVote(null); setReason(null); setQa([]); setCalled(false); }, [i?.id]);
+  const used = i ? [...new Set([i.what_happened, i.why_it_matters, i.risks, i.opportunities, i.hypotheses, i.bank_view].flat().flatMap(c => c.sources))] : [];
+  // shortcut: QA is a stub until the agent endpoint exists; then POST {insight_id, question}
+  const ask = () => { if (q.trim()) { setQa(a => [...a, [q, 'Ответ появится после подключения ассистента.']]); setQ(''); } };
+  const rate = (v, r) => { setVote(v); setReason(r); if (v === 'yes' || r) send('feedback', { insight: i.id, vote: v, stage: REASONS.find(x => x[0] === r)?.[1] }); };
+
+  return <SidePanel open={!!i} onClose={onClose} size={500} hasCloser>
+    {i && <>
+      <SidePanel.Header title={i.role} hasCloser />
+      <SidePanel.Content>
+        <div className="panel">
+          <Title tag="h2" view="small" weight="bold">{i.title}</Title>
+          <Typography.Text view="primary-small" color="secondary" tag="p">Почему сейчас: {i.why_now}</Typography.Text>
+
+          <Layer kind="fact" label="Факты · что произошло" claims={i.what_happened} sources={sources} />
+          <Layer kind="ai" label="Вывод AI · почему это важно вам" claims={i.why_it_matters} sources={sources} />
+          <Layer kind="ai" label="Риски" claims={i.risks} sources={sources} />
+          <Layer kind="ai" label="Возможности" claims={i.opportunities} sources={sources} />
+          <Layer kind="hyp" label="Гипотезы · требуют проверки" claims={i.hypotheses} sources={sources} />
+          {i.bank_view.length
+            ? <Layer kind="bank" label="Позиция Банка" claims={i.bank_view} sources={sources} />
+            : <Plate view="attention" title="Аналитики Банка по этой теме нет">Вывод не является официальной позицией Банка.</Plate>}
+
+          <section className="layer">
+            <Typography.Text view="caps" weight="bold" tag="div">Что сделать</Typography.Text>
+            <ol>{i.actions.map(a => <li key={a}>{a}</li>)}</ol>
+            <Typography.Text view="primary-medium" tag="p"><b>Итог AI:</b> {i.ai_conclusion}</Typography.Text>
+          </section>
+
+          {i.bank_product && <Plate view="common" title="Чем может помочь Банк"
+            buttons={[<Button key="m" size={32} view="secondary" disabled={called} onClick={() => setCalled(true)}>
+              {called ? 'Менеджер свяжется с вами' : 'Связаться с менеджером'}</Button>]}>
+            {i.bank_product}</Plate>}
+
+          <section className="layer">
+            <Typography.Text view="caps" weight="bold" tag="div">Вопрос по событию</Typography.Text>
+            {qa.map(([qq, a], n) => <p key={n} className="qa"><b>{qq}</b><br />{a}</p>)}
+            <Input block size={48} placeholder="Например: что будет, если ЦБ снизит ставку?" value={q}
+              onChange={e => setQ(e.target.value)} onKeyDown={e => e.key === 'Enter' && ask()} />
+          </section>
+
+          <section className="layer">
+            <Typography.Text view="caps" weight="bold" tag="div">Источники</Typography.Text>
+            <ul className="src">{used.map(id => {
+              const s = sources[id];
+              if (!s) return <li key={id} id={`src-${id}`}>{id}</li>;
+              return <li key={id} id={`src-${id}`}>
+                {s.kind === 'fact' ? <><b>Данные компании:</b> {s.text}</>
+                  : <><b>{s.kind === 'bank' ? `Альфа-Банк, «${s.title}»` : s.outlet}</b>, {date(s.date)}{s.page && `, с. ${s.page}`}
+                    {s.kind === 'news' && <> — {s.url ? <a href={s.url} target="_blank" rel="noreferrer">{s.title}</a> : s.title}</>}
+                    <br /><span className="snip">{s.snippet}</span></>}
+              </li>;
+            })}</ul>
+          </section>
+
+          <details className="trace">
+            <summary>Как мы пришли к выводу</summary>
+            <ol>{i.trace.map((t, n) => <li key={n} className={`t-${t.status || t.kind}`}><span>{TRACE[t.kind]}</span>{t.text}</li>)}</ol>
+          </details>
+
+          <p className="ip-disclaimer">Не является инвестиционной рекомендацией.</p>
+        </div>
+      </SidePanel.Content>
+      <SidePanel.Footer>
+        <div className="fb">
+          {vote === 'no' && !reason && <div className="fb-reasons">{REASONS.map(([r]) =>
+            <Tag key={r} size={32} onClick={() => rate('no', r)}>{r}</Tag>)}</div>}
+          <div className="fb-btns">
+            {vote && (vote === 'yes' || reason)
+              ? <Typography.Text view="primary-small" color="secondary">Спасибо! Учтём при подборе событий.</Typography.Text>
+              : <>
+                <Button size={40} view="secondary" onClick={() => rate('yes')}>Полезно</Button>
+                <Button size={40} view="secondary" onClick={() => setVote('no')}>Не полезно</Button>
+              </>}
+            <Button size={40} view="text" onClick={() => onHide(i.id)}>Скрыть</Button>
+          </div>
+        </div>
+      </SidePanel.Footer>
+    </>}
+  </SidePanel>;
+}
+
+// what the bank knows about the company + HITL: agent hypotheses the data could not settle become optional
+// «Верно ли, что …?» questions; answers make the exposure profile more precise
+const VERDICT = { yes: 'да', no: 'нет' };
+function Profile({ profile: p, answers, onAnswer }) {
+  const [later, setLater] = useState(false);
+  const [other, setOther] = useState(null); // text while «Другое» is open
+  if (!p) return null;
+  const rest = p.hypotheses.filter(h => !answers[h.id]);
+  const h = rest[0];
+  const answered = p.hypotheses.filter(x => answers[x.id] && answers[x.id].verdict !== 'skip');
+  const save = a => { onAnswer(h.id, a); setOther(null); };
+  const rows = [['Отрасль', p.industry], ['Масштаб', p.scale], ['Группа', p.group], ['Продукты Банка', p.bank_products.join(', ')]];
+
+  return <>
+    {h && !later && <div className="card hitl">
+      <div className="hitl-head">
+        <Typography.Text view="primary-small" color="secondary">
+          Помогите точнее подбирать события · вопрос {p.hypotheses.length - rest.length + 1} из {p.hypotheses.length}</Typography.Text>
+        <Button view="text" size={32} onClick={() => setLater(true)}>Не сейчас</Button>
+      </div>
+      <Title tag="h3" view="small" weight="bold">{h.question}</Title>
+      <Typography.Text view="primary-small" color="secondary" tag="p">Почему спрашиваем: {h.for}. {h.impact}</Typography.Text>
+      {other === null
+        ? <div className="iw-btns">
+          <Button size={40} view="secondary" onClick={() => save({ verdict: 'yes' })}>Да</Button>
+          <Button size={40} view="secondary" onClick={() => save({ verdict: 'no' })}>Нет</Button>
+          <Button size={40} view="secondary" onClick={() => setOther('')}>Другое</Button>
+          <Button size={40} view="text" onClick={() => save({ verdict: 'skip' })}>Пропустить</Button>
+        </div>
+        : <div className="iw-btns">
+          <Input className="hitl-input" size={48} autoFocus placeholder="Как на самом деле?" value={other}
+            onChange={e => setOther(e.target.value)} onKeyDown={e => e.key === 'Enter' && other.trim() && save({ verdict: 'other', text: other.trim() })} />
+          <Button size={48} view="primary" disabled={!other.trim()} onClick={() => save({ verdict: 'other', text: other.trim() })}>Сохранить</Button>
+          <Button size={48} view="text" onClick={() => setOther(null)}>Отмена</Button>
+        </div>}
+    </div>}
+
+    <div className="card prof">
+      <Title tag="h3" view="xsmall" weight="bold">Как мы видим вашу компанию</Title>
+      <dl>{rows.map(([k, v]) => <React.Fragment key={k}><dt>{k}</dt><dd>{v}</dd></React.Fragment>)}</dl>
+      <Title tag="h3" view="xsmall" weight="bold">Через что новости влияют на вас</Title>
+      <ul>{p.channels.map(c => <li key={c.name}><b>{c.name}</b> — {c.why}</li>)}</ul>
+      {answered.length > 0 && <>
+        <Title tag="h3" view="xsmall" weight="bold">Ваши уточнения</Title>
+        <ul className="answers">{answered.map(x => {
+          const a = answers[x.id];
+          return <li key={x.id}>{x.text}: <b>{VERDICT[a.verdict] || a.text}</b>
+            <Button view="text" size={32} onClick={() => { onAnswer(x.id, undefined); setLater(false); }}>Изменить</Button></li>;
+        })}</ul>
+      </>}
+      {later && rest.length > 0 && <Button view="text" size={32} onClick={() => setLater(false)}>Ответить на вопросы о компании ({rest.length})</Button>}
+    </div>
+  </>;
+}
+
+createRoot(document.getElementById('insights-root')).render(<App />);

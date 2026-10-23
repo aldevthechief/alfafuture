@@ -1,0 +1,16 @@
+{
+ "_about": "Real (company -> news) pairs for retrieval recall: the main news and the second factors of the 10 worked insight examples (docs/manual_analysis/insight-examples.md) plus the fuel-trader demo U_31505. News ids are rows of data/news/news.parquet. Picked by hand after reading the examples; the examples themselves were found news-first, so this set favours news a keyword search can reach.",
+ "pairs": {
+  "U_34911": [7468, 8153, 7282, 5858],
+  "U_57706": [6823, 7041, 6795],
+  "U_44564": [6038, 897, 1172],
+  "U_81081": [7770, 2630],
+  "U_106783": [1581, 8396],
+  "U_177581": [8885, 979, 2472, 2633, 2067],
+  "U_14366": [5033, 4892],
+  "U_9602": [71, 0, 7895],
+  "U_20198": [5372, 5357, 5450, 6613],
+  "U_9088": [2297],
+  "U_31505": [8605, 8603, 1913, 2199]
+ }
+}

@@ -1,0 +1,74 @@
+{
+ "U_76122": {
+  "okved": "41.20",
+  "band": "leader",
+  "rank": 3,
+  "of": 5463,
+  "edges": 433,
+  "revenue_bn": 11.782
+ },
+ "U_55267": {
+  "okved": "41.20",
+  "band": "top20",
+  "rank": 1054,
+  "of": 5463,
+  "edges": 388,
+  "revenue_bn": 0.258
+ },
+ "U_44767": {
+  "okved": "41.20",
+  "band": "top70",
+  "rank": 3908,
+  "of": 5463,
+  "edges": 42,
+  "revenue_bn": 0.0
+ },
+ "U_257637": {
+  "okved": "62.01",
+  "band": "leader",
+  "rank": 3,
+  "of": 2772,
+  "edges": 53,
+  "revenue_bn": 11.438
+ },
+ "U_49717": {
+  "okved": "62.01",
+  "band": "top20",
+  "rank": 501,
+  "of": 2772,
+  "edges": 836,
+  "revenue_bn": 0.37
+ },
+ "U_174807": {
+  "okved": "62.01",
+  "band": "top70",
+  "rank": 1955,
+  "of": 2772,
+  "edges": 90,
+  "revenue_bn": 0.005
+ },
+ "U_68622": {
+  "okved": "56.10",
+  "band": "leader",
+  "rank": 1,
+  "of": 4232,
+  "edges": 72,
+  "revenue_bn": 3.391
+ },
+ "U_57162": {
+  "okved": "56.10",
+  "band": "top20",
+  "rank": 907,
+  "of": 4232,
+  "edges": 102,
+  "revenue_bn": 0.183
+ },
+ "U_220924": {
+  "okved": "56.10",
+  "band": "top70",
+  "rank": 3025,
+  "of": 4232,
+  "edges": 75,
+  "revenue_bn": 0.01
+ }
+}

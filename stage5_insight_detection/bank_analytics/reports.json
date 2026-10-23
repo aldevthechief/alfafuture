@@ -1,0 +1,12 @@
+{"_note": "Metadata of the bank analytics PDFs in data/analytics/ (the PDFs are confidential, not in git). Dates from analytics-notes.md.",
+ "reports": [
+  {"file": "ALFA-Macro_Insights-Policy_Rate_11Sep.pdf", "title": "Ключевая ставка ЦБ РФ: без изменения на 14,0%", "date": "2026-09-11"},
+  {"file": "Бонд_Бриф_14092026.pdf", "title": "Бонд Бриф: итоги недели", "date": "2026-09-14"},
+  {"file": "ALFA-7M26.pdf", "title": "Макростатистика 7М26", "date": "2026-09-07"},
+  {"file": "Inflation_tracker_02.pdf", "title": "Инфляция 25–31 августа", "date": "2026-09-02"},
+  {"file": "ALFA-consumption.pdf", "title": "Потребление на пике", "date": "2026-08-05"},
+  {"file": "ALFA-macro_stat1H26.pdf", "title": "Макростатистика 1П26", "date": "2026-07-31"},
+  {"file": "FI_Strategy_3Q26_22072026.pdf", "title": "Тактический взгляд на 3-й квартал 2026 (долговой рынок)", "date": "2026-07-22"},
+  {"file": "Gold_digest_August26.pdf", "title": "Обзор рынка золота, август 2026", "date": "2026-08-31"},
+  {"file": "ALFA_Russian_Steels_1К21PreviewUpdate_15Apr2021.pdf", "title": "Российская сталь: прогноз результатов за 1К21", "date": "2021-04-15"}
+ ]}

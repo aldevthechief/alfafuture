@@ -1,0 +1,270 @@
+{
+ "file_sha256": "c74d78c7e6c4935e28a517feb0e0ae3bffcea18f2c792e5ec6fd76cda058520d",
+ "corpus_fingerprint": "8225a61f314ae8686608ddaf6e5e43dfe33029bd0a0da130c9730c1fad57420c",
+ "references": {
+  "0": {
+   "id": "0",
+   "url": "https://www.bfm.ru/news/618320",
+   "content_fingerprint": "c74fb060c737995b72a268f4c8d805a0fc28809dc52bd36dd455d0e074b6f85b",
+   "title": "Саудовская Аравия расширила список поставщиков российской молочной продукции",
+   "date": "2026-09-18",
+   "source": "bfm"
+  },
+  "1172": {
+   "id": "1172",
+   "url": "https://buh.ru/news/povyshenie-ndfl-na-passivnye-dokhody-tekhnologicheskiy-sbor-na-smartfony-i-nds-na-zarubezhnye-onlayn.html",
+   "content_fingerprint": "5676a4e9fd1a9d08a99a438556bdad49f241c4e9862760a2c733471f88067e29",
+   "title": "Повышение НДФЛ на пассивные доходы, технологический сбор на смартфоны и НДС на зарубежные онлайн-покупки: самые плохие новости недели",
+   "date": "2026-09-25",
+   "source": "buh"
+  },
+  "1581": {
+   "id": "1581",
+   "url": "https://www.bigpowernews.ru/news/document126827.phtml",
+   "content_fingerprint": "b6bcff796766c746017380662381dfd514e52deeb3c65c2be9a8897423129dab",
+   "title": "Правительство с 2027 г распространит критерии локализации на КРУЭ до 35 кВ включительно и введет для них и КРУЭ свыше 35 кВ балльную систему.",
+   "date": "2026-09-28",
+   "source": "bigpowernews"
+  },
+  "1913": {
+   "id": "1913",
+   "url": "https://www.interfax.ru/business/1119175",
+   "content_fingerprint": "81251e5af0b049344544607ced7698cbe6b8c388ea4410ab03ed9d00e0c7b024",
+   "title": "Новак поставил задачу принимать оперативные решения для ликвидации локальных дефицитов топлива",
+   "date": "2026-09-29",
+   "source": "interfax"
+  },
+  "2067": {
+   "id": "2067",
+   "url": "https://www.vedomosti.ru/realty/articles/2026/09/29/1232549-novostroiki-perestali-dorozhat",
+   "content_fingerprint": "2459652ee56aa6d637a95a3eff34d0196edc26bd9c222cba9aeaa873be995be7",
+   "title": "Новостройки перестали дорожать, несмотря на ожидания изменений семейной ипотеки",
+   "date": "2026-09-29",
+   "source": "vedomosti"
+  },
+  "2199": {
+   "id": "2199",
+   "url": "https://www.interfax.ru/russia/1119311",
+   "content_fingerprint": "07263a2785aa5379e285cd02ba4a9ad5006e65555d8ceb7d3d6e99a87bde704d",
+   "title": "Правительство продлило до 31 октября запрет на экспорт дизтоплива для производителей",
+   "date": "2026-09-30",
+   "source": "interfax"
+  },
+  "2297": {
+   "id": "2297",
+   "url": "https://www.kommersant.ru/doc/8990884",
+   "content_fingerprint": "cede8a255a448aa198dbfdc20061a96196597c7bfd89a4c466f9315ba7f81aec",
+   "title": "ФАС проанализирует соответствие тарифов на электроэнергию утвержденным индексам",
+   "date": "2026-09-30",
+   "source": "kommersant"
+  },
+  "2472": {
+   "id": "2472",
+   "url": "https://www.interfax.ru/business/1119511",
+   "content_fingerprint": "86be47d2851fee5c191b0e491d0406935756c482a6b8e1451df39b305d8dcc77",
+   "title": "В РФ с 1 октября меняются условия семейной ипотеки",
+   "date": "2026-10-01",
+   "source": "interfax"
+  },
+  "2630": {
+   "id": "2630",
+   "url": "https://vademec.ru/news/2026/10/01/pravitelstvo-vpervye-za-5-let-predlozhilo-urezat-finansirovanie-na-zdravookhranenie-iz-fedbyudzheta",
+   "content_fingerprint": "2007fc13e8eaac0d1c1b56186bb7ef05fc495b340ceadd749ca8b7d209116222",
+   "title": "Правительство впервые за 5 лет предложило урезать финансирование на здравоохранение из федбюджета. Обзор",
+   "date": "2026-10-01",
+   "source": "vademec"
+  },
+  "2633": {
+   "id": "2633",
+   "url": "https://www.vedomosti.ru/finance/articles/2026/10/01/1233246-novie-usloviya-semeinoi-ipoteki",
+   "content_fingerprint": "b9f811d3cab5a947dd32540e10cc5a7204f8caf9d57912b837099d61b5c79df5",
+   "title": "В России заработали новые условия семейной ипотеки",
+   "date": "2026-10-01",
+   "source": "vedomosti"
+  },
+  "4892": {
+   "id": "4892",
+   "url": "https://www.kommersant.ru/doc/9024526",
+   "content_fingerprint": "8e465664cddad96d7f3f1752936aa6b41b082ad795e2d0625f84fb05b81830c4",
+   "title": "ДОМ.РФ разместил новый выпуск облигаций на сумму 10 млрд руб. в рамках программ льготного лизинга",
+   "date": "2026-10-12",
+   "source": "kommersant"
+  },
+  "5033": {
+   "id": "5033",
+   "url": "https://www.autostat.ru/news/63286",
+   "content_fingerprint": "898809237bc3c3bc861641b911e210ccd4459f5558662f94949fc3dd8808abf3",
+   "title": "Продажи новых LCV в сентябре уменьшились на 12%",
+   "date": "2026-10-13",
+   "source": "autostat"
+  },
+  "5357": {
+   "id": "5357",
+   "url": "https://thebell.io/strakhovanie-skladov-podorozhalo-v-desyatki-raz-pyat-pogibshikh-v-kharkove-i-kieve-novyy-mirnyy-plan-ssha",
+   "content_fingerprint": "ef713928b1642da3c394d22bab9c1f99f43c395568392d61121c1f9a7a788f58",
+   "title": "Страхование складов подорожало в десятки раз, пять погибших в Харькове и Киеве, новый мирный план США",
+   "date": "2026-10-13",
+   "source": "thebell"
+  },
+  "5372": {
+   "id": "5372",
+   "url": "https://www.vedomosti.ru/finance/articles/2026/10/13/1236473-strahovanie-skladov-podorozhalo",
+   "content_fingerprint": "349a227150d311d06389e0363d10bac43a998a6e493400439452121b8a2efd33",
+   "title": "Страхование складов подорожало в десятки раз",
+   "date": "2026-10-13",
+   "source": "vedomosti"
+  },
+  "5450": {
+   "id": "5450",
+   "url": "https://iz.ru/2183580/2026-10-13/ploshchad-pozhara-na-sklade-v-rostove-na-donu-uvelichilas-do-9-tys-kv-m",
+   "content_fingerprint": "52ecd3959a1fa06be9ae329e227f0697917113c42647c471c1148d92cbbdf9b6",
+   "title": "Площадь пожара на складе в Ростове-на-Дону увеличилась до 9 тыс. кв. м",
+   "date": "2026-10-13",
+   "source": "iz"
+  },
+  "5858": {
+   "id": "5858",
+   "url": "https://www.interfax.ru/business/1122475",
+   "content_fingerprint": "e0c27b2610d3084db048690ddfe2d9b3981ed07dc589172274ce6fa2aa88cb0d",
+   "title": "Российские сельхозорганизации в сентябре снизили продажу пшеницы на 26,4%",
+   "date": "2026-10-14",
+   "source": "interfax"
+  },
+  "6038": {
+   "id": "6038",
+   "url": "https://thebell.io/prodavtsy-elektroniki-poprosili-snizit-tekhnologicheskiy-sbor-iz-za-vozmozhnogo-rosta-tsen",
+   "content_fingerprint": "7deb9dd0683cd30c5f45ecb1ede0fee7d130c8fb202045bf41185ba46912b4ea",
+   "title": "Продавцы электроники попросили снизить технологический сбор из-за возможного роста цен",
+   "date": "2026-10-14",
+   "source": "thebell"
+  },
+  "6613": {
+   "id": "6613",
+   "url": "https://www.interfax.ru/moscow/1122594",
+   "content_fingerprint": "78860b7786faaf16c3c97acf3c85936d97b276247611a586958ee7622281ba12",
+   "title": "В Подольске при пожаре на складе разгерметизировалась емкость с газом",
+   "date": "2026-10-15",
+   "source": "interfax"
+  },
+  "6795": {
+   "id": "6795",
+   "url": "https://thebell.io/ukraina-vozobnovila-udary-porossiyskim-npz",
+   "content_fingerprint": "d56329a83ea0edc304747f96a2c99cb33e9f9fa361088f2923fd4727c0b24993",
+   "title": "Украина возобновила удары по российским НПЗ",
+   "date": "2026-10-15",
+   "source": "thebell"
+  },
+  "6823": {
+   "id": "6823",
+   "url": "https://www.vedomosti.ru/business/news/2026/10/15/1237276-zapreta-sug",
+   "content_fingerprint": "78086db5428f5f4f89934ad27a6ab65e63d8d8c3a11437d1a87fe220d0b87965",
+   "title": "Новак сообщил о рассмотрении запрета на экспорт СУГ",
+   "date": "2026-10-15",
+   "source": "vedomosti"
+  },
+  "7041": {
+   "id": "7041",
+   "url": "https://ria.ru/20261015/sug-2124641598.html",
+   "content_fingerprint": "55a73220ab5208e5e1b7650ffb4d9b720e7a3822e771d572d237a777f0c60b2f",
+   "title": "Россия может запретить экспорт СУГ для непроизводителей, заявил Новак",
+   "date": "2026-10-15",
+   "source": "ria"
+  },
+  "71": {
+   "id": "71",
+   "url": "https://www.retail.ru/news/pravitelstvo-utverdilo-spisok-produktov-dlya-monitoringa-tsen-s-2027-goda-19-sentyabrya-2026-282320",
+   "content_fingerprint": "d0f6b92e30c5d4e5acd6c73e73b66667fddc34a97bad358454613dc34e8cfc7b",
+   "title": "Правительство утвердило список продуктов для мониторинга цен с 2027 года – Новости ритейла и розничной торговли | Retail.ru",
+   "date": "2026-09-19",
+   "source": "retail"
+  },
+  "7282": {
+   "id": "7282",
+   "url": "https://www.interfax.ru/business/1122958",
+   "content_fingerprint": "ec34fa068f5dd591eed7727d8e4710e466ea6f1e1a6630ed3f64c24c42f3494f",
+   "title": "МСЗ снизил прогноз экспорта пшеницы из России в 2026/27 сельхозгоду до 39,4 млн т",
+   "date": "2026-10-16",
+   "source": "interfax"
+  },
+  "7468": {
+   "id": "7468",
+   "url": "https://thebell.io/chem-ukraine-grozit-razryv-s-trampom-pochemu-rossiya-ne-mozhet-vyvezti-urozhay-i-kak-voyna-dobralas-do-vod-nato",
+   "content_fingerprint": "c3bb68e6a70636cbaf12421eec4f44859ee6879ac453847ed8dfe2adf61d943b",
+   "title": "Чем Украине грозит разрыв с Трампом, почему Россия не может вывезти урожай и как война добралась до вод НАТО",
+   "date": "2026-10-16",
+   "source": "thebell"
+  },
+  "7770": {
+   "id": "7770",
+   "url": "https://www.consultant.ru/law/hotdocs/95996.html",
+   "content_fingerprint": "3fee1b1de689002b9b2cd8812c60bc8a7ac403253b6195a55cdae7057af5ad53",
+   "title": "Расширяется применение механизма ограничения допуска иностранных товаров по правилу \"второй лишний\"",
+   "date": "2026-10-17",
+   "source": "consultant"
+  },
+  "7895": {
+   "id": "7895",
+   "url": "https://iz.ru/2185867/v-rossii-podesheveli-svinina-i-slivochnoe-maslo-s-nachala-goda-izi",
+   "content_fingerprint": "c4a4aab2940138725debf34477ee0ebf34fdc5cd5524a3e0acb38ade9c5000ec",
+   "title": "В России подешевели свинина и сливочное масло с начала года",
+   "date": "2026-10-17",
+   "source": "iz"
+  },
+  "8153": {
+   "id": "8153",
+   "url": "https://www.kommersant.ru/doc/9041490",
+   "content_fingerprint": "eeaded26cbad108286476294a12926983fbed3856e97205fdd2feb3796755e6a",
+   "title": "Стоимость пшеницы за неделю выросла в России на 0,4–1,2%",
+   "date": "2026-10-18",
+   "source": "kommersant"
+  },
+  "8396": {
+   "id": "8396",
+   "url": "https://www.bigpowernews.ru/news/document127145.phtml",
+   "content_fingerprint": "3374b2e81c2dd552cbc4931336ddf88daf43aecb650e26b4756c4eafe2c8fd2e",
+   "title": "«Россети» обсуждают технологии накопителей энергии с компаниями Китая, Индии и Ближнего Востока",
+   "date": "2026-10-19",
+   "source": "bigpowernews"
+  },
+  "8603": {
+   "id": "8603",
+   "url": "https://www.kommersant.ru/doc/9042448",
+   "content_fingerprint": "826806c7d32dd2fbb25c6d611d9d381faa717af4a28acf5b99fbd8072659ca28",
+   "title": "В Минэнерго объяснили значение реестра внебиржевых договоров",
+   "date": "2026-10-19",
+   "source": "kommersant"
+  },
+  "8605": {
+   "id": "8605",
+   "url": "https://www.kommersant.ru/doc/9042399",
+   "content_fingerprint": "524a8b05fa4ce05992c709d876d291ec71f058de02f6ebb0deab8afa49473197",
+   "title": "Регистрация внебиржевых сделок с нефтепродуктами охватила четверть продаж",
+   "date": "2026-10-19",
+   "source": "kommersant"
+  },
+  "8885": {
+   "id": "8885",
+   "url": "https://stroygaz.ru/news/construction/perenosy-planiruemykh-srokov-vvoda-stroyashchikhsya-mkd-za-god-uvelichilis-v-rossii-na-9",
+   "content_fingerprint": "3e08e5daae740e60a8fa2cd1e2ff1a0324497f07dbb2a24a8b8bf3df1564d5f0",
+   "title": "Переносы планируемых сроков ввода строящихся МКД за год увеличились в России на 9% - Строительная газета",
+   "date": "2026-10-19",
+   "source": "stroygaz"
+  },
+  "897": {
+   "id": "897",
+   "url": "https://1prime.ru/20260924/vt-873660404.html",
+   "content_fingerprint": "6abb02b20264b773befd299d06ee814747b33506421c2052b1229d4a900af131",
+   "title": "Отраслевое объединение предложило снижение платежа за технологический сбор",
+   "date": "2026-09-24",
+   "source": "1prime"
+  },
+  "979": {
+   "id": "979",
+   "url": "https://www.interfax.ru/business/1118280",
+   "content_fingerprint": "bab9ac1d021c70a3602bb7e9c976371e80c129c1c8c3c2ea9512fa220ac9a3ba",
+   "title": "Минфин РФ меняет условия семейной ипотеки с 1 октября",
+   "date": "2026-09-24",
+   "source": "interfax"
+  }
+ }
+}

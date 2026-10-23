@@ -1,0 +1,6 @@
+{"_note": "Synthetic company profile (fields of analyst_loop.profile.CompanyProfile); built from the case tables by CompanyProfile.from_tables in real runs.",
+ "id": "U_SYNTH_1", "okved": "41.20", "okved_name": "Строительство жилых и нежилых зданий", "region": "Москва",
+ "revenue": 40000000000, "group_revenue": 52000000000, "products": ["loan", "rko", "guarantee"],
+ "fts_countries": [], "fts_flag": false,
+ "pay_out": {"23": 0.30, "24": 0.12, "43": 0.25}, "pay_in": {"68": 0.55},
+ "pay_out_total": 21000000000, "pay_in_total": 38000000000}

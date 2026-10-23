@@ -1,0 +1,370 @@
+{
+ "_about": "U_106783: judge v2 negatives (not majority-positive) that are useful for the company feed, by manual read 21.10.2026; tier = my grade",
+ "company": "U_106783",
+ "items": [
+  {
+   "event": 994,
+   "title": "Правительство одобрило проект нового трехлетнего бюджета",
+   "tier": "strong",
+   "note": "budget 2027–29: dividend tax for non-residents on «С» accounts 35% -> foreign owner",
+   "proposed_generator": "ownership_foreign / state_budget",
+   "found_by": "random sample",
+   "judge": {
+    "significance": 3.0,
+    "mechanism": 1.33,
+    "potential": 1.67
+   }
+  },
+  {
+   "event": 226,
+   "title": "Временный управляющий сообщил о планах по сохранению «Ашана» и «Лемана Про» | Эксперт",
+   "tier": "strong",
+   "note": "Auchan / Lemana Pro under temporary management: precedent for foreign-capital companies",
+   "proposed_generator": "ownership_foreign",
+   "found_by": "random sample",
+   "judge": {
+    "significance": 2.0,
+    "mechanism": 1.0,
+    "potential": 2.0
+   }
+  },
+  {
+   "event": 2564,
+   "title": "ООО «Башкирэнерго» делает сети пригородов г. Уфы «умнее»",
+   "tier": "strong",
+   "note": "Bashkirenergo Smart grid 2.0 pilot: relay protection, automation purchases",
+   "proposed_generator": "buyer_capex",
+   "found_by": "own_industry rank 7",
+   "judge": {
+    "significance": 1.33,
+    "mechanism": 2.0,
+    "potential": 2.0
+   }
+  },
+  {
+   "event": 6762,
+   "title": "Конюшенко: Спрос на электроэнергию в России быстро вернется к росту",
+   "tier": "strong",
+   "note": "electricity demand returns to growth, General scheme (grid projects) not cut",
+   "proposed_generator": "buyer_capex",
+   "found_by": "own_industry rank 16",
+   "judge": {
+    "significance": 1.0,
+    "mechanism": 2.0,
+    "potential": 1.67
+   }
+  },
+  {
+   "event": 676,
+   "title": "В Ростовской области на оздоровление Дона направят 105,5 млрд рублей",
+   "tier": "strong",
+   "note": "105.5 bn ₽ Don programme: hydro units, treatment plants (switchgear)",
+   "proposed_generator": "buyer_capex / sales_regions",
+   "found_by": "random sample",
+   "judge": {
+    "significance": 1.5,
+    "mechanism": 1.5,
+    "potential": 1.5
+   }
+  },
+  {
+   "event": 1746,
+   "title": "ЦБ до конца 2026 г. ввел льготные коэффициенты риска по кредитам на обеспечение защиты инфраструктуры от атак",
+   "tier": "strong",
+   "note": "CBR lower risk weights for loans on infrastructure protection",
+   "proposed_generator": "financing_terms / buyer_capex",
+   "found_by": "bank_product rank 8",
+   "judge": {
+    "significance": 2.0,
+    "mechanism": 1.33,
+    "potential": 2.0
+   }
+  },
+  {
+   "event": 5411,
+   "title": "Продавцы электроники попросили снизить технологический сбор из-за возможного роста цен",
+   "tier": "strong",
+   "note": "electronics sellers ask to cut the technology fee (tech fee regime for electrical goods)",
+   "proposed_generator": "product_regulation",
+   "found_by": "own_industry rank 20",
+   "judge": {
+    "significance": 1.67,
+    "mechanism": 0.0,
+    "potential": 0.0
+   }
+  },
+  {
+   "event": 2130,
+   "title": "Как команда Петербургского филиала сэкономила заводу 9 млн рублей на электрощитах",
+   "tier": "medium",
+   "note": "plant saved 9 mn ₽ replacing imported ABB retrofit cabinets with standard switchboards",
+   "proposed_generator": "competition_import",
+   "found_by": "own_industry rank 26",
+   "judge": {
+    "significance": 1.0,
+    "mechanism": 1.33,
+    "potential": 1.33
+   }
+  },
+  {
+   "event": 6478,
+   "title": "IEK GROUP провела форум, посвященный будущему электротехнической отрасли",
+   "tier": "medium",
+   "note": "IEK GROUP (competitor) forum on the future of the electrical industry",
+   "proposed_generator": "competition_import",
+   "found_by": "own_industry rank 19",
+   "judge": {
+    "significance": 1.0,
+    "mechanism": 1.33,
+    "potential": 0.67
+   }
+  },
+  {
+   "event": 7369,
+   "title": "Минск и Москва в ближайшее время подпишут правила работы объединенного рынка электроэнергии",
+   "tier": "medium",
+   "note": "Minsk–Moscow common electricity market rules",
+   "proposed_generator": "buyer_capex",
+   "found_by": "own_industry rank 5",
+   "judge": {
+    "significance": 2.0,
+    "mechanism": 1.0,
+    "potential": 1.0
+   }
+  },
+  {
+   "event": 4578,
+   "title": "Цены на оптовом энергорынке в сентябре увеличились во всех ценовых зонах, в Сибири и на Востоке рост превысил 20%",
+   "tier": "medium",
+   "note": "wholesale power prices +6.9% in zone 1 (cost of the plant)",
+   "proposed_generator": "input_costs",
+   "found_by": "own_industry rank 27",
+   "judge": {
+    "significance": 2.0,
+    "mechanism": 1.0,
+    "potential": 0.67
+   }
+  },
+  {
+   "event": 270,
+   "title": "ООО «Башкирэнерго» испытывает новую систему поиска повреждений",
+   "tier": "medium",
+   "note": "Bashkirenergo tests a new fault-location system",
+   "proposed_generator": "buyer_capex",
+   "found_by": "own_industry rank 11",
+   "judge": {
+    "significance": 1.0,
+    "mechanism": 0.67,
+    "potential": 0.33
+   }
+  },
+  {
+   "event": 480,
+   "title": "«Россети Тюмень» повысили надежность электроснабжения девяти населенных пунктов Тюменской области",
+   "tier": "medium",
+   "note": "Rosseti Tyumen reliability works in 9 settlements",
+   "proposed_generator": "buyer_capex",
+   "found_by": "own_industry rank 34",
+   "judge": {
+    "significance": 1.0,
+    "mechanism": 1.0,
+    "potential": 0.67
+   }
+  },
+  {
+   "event": 2576,
+   "title": "«Россети Тюмень» смонтируют более 900 интеллектуальных приборов учета в Югре",
+   "tier": "medium",
+   "note": "Rosseti Tyumen installs 900+ smart meters in Yugra",
+   "proposed_generator": "buyer_capex",
+   "found_by": "own_industry rank 17",
+   "judge": {
+    "significance": 1.0,
+    "mechanism": 0.67,
+    "potential": 0.67
+   }
+  },
+  {
+   "event": 4163,
+   "title": "Число высокотехнологичных предприятий в ОЭЗ «Технополис Москва» превысило 250",
+   "tier": "medium",
+   "note": "Technopolis Moscow: 250 high-tech plants (battery cluster)",
+   "proposed_generator": "buyer_capex / sales_regions",
+   "found_by": "region rank 4",
+   "judge": {
+    "significance": 1.33,
+    "mechanism": 1.33,
+    "potential": 1.67
+   }
+  },
+  {
+   "event": 66,
+   "title": "Технопарк формата light industrial «Есипово» готовится запустить пятую очередь и увеличить площадь для резидентов на 65 тыс. кв. м – Новости ритейла и розничной торговли | Retail.ru",
+   "tier": "medium",
+   "note": "Esipovo light-industrial technopark 5th phase",
+   "proposed_generator": "buyer_capex",
+   "found_by": "random sample",
+   "judge": {
+    "significance": 1.0,
+    "mechanism": 1.0,
+    "potential": 1.0
+   }
+  },
+  {
+   "event": 6908,
+   "title": "Трамп отказался применять ряд «адских санкций» против России",
+   "tier": "medium",
+   "note": "Trump pauses «hell sanctions» (500% duties, banks)",
+   "proposed_generator": "trade_regime",
+   "found_by": "trade_country rank 0",
+   "judge": {
+    "significance": 3.0,
+    "mechanism": 1.0,
+    "potential": 1.0
+   }
+  },
+  {
+   "event": 3048,
+   "title": "Банк России поднял курс доллара почти до 85 рублей",
+   "tier": "medium",
+   "note": "USD to ~85, Minfin FX purchases 279 bn ₽ for a month",
+   "proposed_generator": "fx_shift",
+   "found_by": "macro rank 9",
+   "judge": {
+    "significance": 1.67,
+    "mechanism": 1.0,
+    "potential": 1.0
+   }
+  },
+  {
+   "event": 2814,
+   "title": "\"Юань оттолкнулся от 12,5\": аналитики оценили рост курса валют",
+   "tier": "medium",
+   "note": "Minfin FX purchases ×6.3, yuan from 12.5 up",
+   "proposed_generator": "fx_shift",
+   "found_by": "macro rank 7",
+   "judge": {
+    "significance": 1.67,
+    "mechanism": 1.0,
+    "potential": 0.67
+   }
+  },
+  {
+   "event": 1717,
+   "title": "Доля ищущих работу больше года выросла за год в полтора раза",
+   "tier": "weak",
+   "note": "long-term job seekers ×1.5 (labour market)",
+   "proposed_generator": "labour_costs",
+   "found_by": "bank_product rank 3",
+   "judge": {
+    "significance": 1.33,
+    "mechanism": 2.33,
+    "potential": 1.33
+   }
+  },
+  {
+   "event": 561,
+   "title": "Возобновляемая энергетика в России: устойчивый рост и новые горизонты",
+   "tier": "weak",
+   "note": "renewables growth review, grid modernisation need",
+   "proposed_generator": "buyer_capex",
+   "found_by": "own_industry rank 35",
+   "judge": {
+    "significance": 1.0,
+    "mechanism": 1.67,
+    "potential": 1.33
+   }
+  },
+  {
+   "event": 2465,
+   "title": "Шульгинов назвал защиту потребителей от необоснованных повышений тарифов одним из приоритетов работы комитета Госдумы по энергетике",
+   "tier": "weak",
+   "note": "Duma energy committee: protect consumers from tariff hikes (future tariff law)",
+   "proposed_generator": "input_costs",
+   "found_by": "own_industry rank 25",
+   "judge": {
+    "significance": 1.33,
+    "mechanism": 1.0,
+    "potential": 1.33
+   }
+  },
+  {
+   "event": 5796,
+   "title": "Ленинградская область ввела 3 млн м2 жилья с начала 2026 года",
+   "tier": "weak",
+   "note": "Leningrad region commissioned 3 mn m² of housing",
+   "proposed_generator": "buyer_capex",
+   "found_by": "random sample",
+   "judge": {
+    "significance": 0.33,
+    "mechanism": 0.33,
+    "potential": 0.33
+   }
+  },
+  {
+   "event": 6750,
+   "title": "Обновленные теплосети повысят эффективность теплоснабжения Нововоронежа на 15 процентов",
+   "tier": "weak",
+   "note": "renewed heat networks in Novovoronezh",
+   "proposed_generator": "buyer_capex",
+   "found_by": "random sample",
+   "judge": {
+    "significance": 1.0,
+    "mechanism": 0.33,
+    "potential": 0.33
+   }
+  },
+  {
+   "event": 2391,
+   "title": "Правительство впервые за 5 лет предложило урезать финансирование на здравоохранение из федбюджета. Обзор",
+   "tier": "weak",
+   "note": "federal healthcare spending cut for the first time in 5 years",
+   "proposed_generator": "state_budget",
+   "found_by": "random sample",
+   "judge": {
+    "significance": 2.0,
+    "mechanism": 1.0,
+    "potential": 1.0
+   }
+  },
+  {
+   "event": 641,
+   "title": "Госдолг РФ вырос на 6,8% за полгода | Эксперт",
+   "tier": "weak",
+   "note": "state debt +6.8% in half a year, budget consolidation",
+   "proposed_generator": "state_budget",
+   "found_by": "random sample",
+   "judge": {
+    "significance": 2.0,
+    "mechanism": 1.0,
+    "potential": 1.33
+   }
+  },
+  {
+   "event": 2446,
+   "title": "Доля национальных валют достигла почти 95% во взаиморасчетах стран ЕАЭС",
+   "tier": "weak",
+   "note": "national currencies ~95% of EAEU settlements",
+   "proposed_generator": "trade_regime",
+   "found_by": "random sample",
+   "judge": {
+    "significance": 1.0,
+    "mechanism": 0.0,
+    "potential": 0.0
+   }
+  },
+  {
+   "event": 5808,
+   "title": "Владимир Путин поручил проработать создание экосистемы длинных денег | Эксперт",
+   "tier": "weak",
+   "note": "Putin: build a «long money» ecosystem",
+   "proposed_generator": "financing_terms",
+   "found_by": "random sample",
+   "judge": {
+    "significance": 1.33,
+    "mechanism": 1.0,
+    "potential": 1.0
+   }
+  }
+ ]
+}
