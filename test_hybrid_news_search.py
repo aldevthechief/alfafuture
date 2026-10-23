@@ -174,14 +174,14 @@ class HybridTests(unittest.TestCase):
 
     def test_unavailable_models_fall_back_with_explicit_diagnostics(self):
         ranker = SemanticRanker(Mock(predict=Mock(side_effect=RuntimeError('not installed'))))
-        with patch('common.embed.news_embeddings', side_effect=OSError('offline')), self.assertWarns(RuntimeWarning):
+        with patch('stage3_news_search.retrieval_v2.hybrid.doc_vectors', side_effect=OSError('offline')), self.assertWarns(RuntimeWarning):
             result = hybrid_search(NEWS, self.index, 'ставка', fact_store=self.empty_store, ranker=ranker)
         self.assertEqual(result.iloc[0].id, NEWS.iloc[0].id)
         self.assertIn('unavailable', result.attrs['search_diagnostics']['semantic'])
         self.assertIn('unavailable', result.attrs['search_diagnostics']['rerank'])
 
     def test_empty_query_never_loads_models_and_wrong_scores_are_rejected(self):
-        with patch('common.embed.news_embeddings', side_effect=AssertionError('must stay lazy')):
+        with patch('stage3_news_search.retrieval_v2.hybrid.doc_vectors', side_effect=AssertionError('must stay lazy')):
             self.assertTrue(hybrid_search(NEWS, self.index, '', fact_store=self.empty_store).empty)
             self.assertTrue(hybrid_search(NEWS.head(0), self.index, 'query', fact_store=self.empty_store).empty)
         ranker = SemanticRanker(Mock(predict=Mock(return_value=[float('nan')])))

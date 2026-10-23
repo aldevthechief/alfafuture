@@ -16,8 +16,7 @@ PREFIX = {'ai-forever/FRIDA': ('search_query: ', 'search_document: '),
           'intfloat/multilingual-e5-base': ('query: ', 'passage: '), 'intfloat/multilingual-e5-large': ('query: ', 'passage: '),
           # the instruct model queries carry the task; its passages are plain text (model card)
           'intfloat/multilingual-e5-large-instruct':
-              ('Instruct: Given a web search query, retrieve relevant passages that answer the query
-Query: ', '')}
+              ('Instruct: Given a web search query, retrieve relevant passages that answer the query' + chr(10) + 'Query: ', '')}
 
 
 @lru_cache(None)

@@ -78,7 +78,6 @@ class InsightPipeline:
         self.writer = InsightWriter(agent)
         self._graph = None
         self._params: dict = {}
-        self._run_ctx = contextvars.copy_context()
 
     @pinned_run
     def run(self, company_id: str, role: str, n_candidates: int = 30, n_judge: int = 5,
@@ -87,7 +86,6 @@ class InsightPipeline:
         the joins rank by the retrieval input index, so workers=1 keeps the call order deterministic for scripted
         test models exactly as the thread pool did."""
         self._params = {'company_id': company_id, 'role': role, 'n_judge': n_judge}
-        self._run_ctx = contextvars.copy_context()  # the Langfuse session and the news snapshot travel with every task
         rows = self._prepare(company_id, role, n_candidates, retrieval)
         state = self.news_graph().invoke({'rows': rows}, config={'max_concurrency': max(1, workers)})
         return state['news_results']
@@ -95,7 +93,7 @@ class InsightPipeline:
     def news_graph(self):
         """Stages 2-6 as a compiled LangGraph graph (see langgraph-e2e-design.md): prepare is done by run(),
         assess fans out per news, rank joins, judge+write fans out per top news, collect joins."""
-        if self._graph is None:
+        if getattr(self, '_graph', None) is None:
             g = StateGraph(_NewsState)
             g.add_node('assess_one', self._assess_node)
             g.add_node('rank', self._rank_node)
@@ -111,11 +109,14 @@ class InsightPipeline:
 
     @staticmethod
     def _fan_assess(state: _NewsState) -> list:
-        return [Send('assess_one', {'idx': i, 'news': r}) for i, r in enumerate(state['rows'])] or ['rank']
+        # a fresh copy of this thread's context per task (the Langfuse session, the news snapshot), as the
+        # thread-pool version did; each task enters its own copy, so parallel tasks never share a Context
+        return [Send('assess_one', {'idx': i, 'news': r, 'ctx': contextvars.copy_context()})
+                for i, r in enumerate(state['rows'])] or ['rank']
 
     @staticmethod
     def _fan_judge(state: _NewsState) -> list:
-        return [Send('judge_one', {'pos': p, 'priority': pr, 'news': n, 'stage4': s})
+        return [Send('judge_one', {'pos': p, 'priority': pr, 'news': n, 'stage4': s, 'ctx': contextvars.copy_context()})
                 for p, (pr, n, s) in enumerate(state['top'])] or ['collect']
 
     def _prepare(self, company_id: str, role: str, n_candidates: int, retrieval: str) -> list[dict]:
@@ -132,10 +133,6 @@ class InsightPipeline:
                 'corpus_fingerprint', corpus_fingerprint(self.related.news)) != corpus_fingerprint(self.related.news):
             raise StaleNewsReferences('News changed during retrieval; restart the batch')
         return shortlist.to_dict('records')
-
-    def _task(self, fn, item):
-        """Each task runs in a fresh copy of the run's context: the Langfuse session and the news snapshot live in it."""
-        return self._run_ctx.run(lambda: contextvars.copy_context().run(fn, item))
 
     def _record(self, news: dict, **fields) -> dict:
         result = {'news_id': news['id'], 'title': news['title'], **fields}
@@ -167,7 +164,7 @@ class InsightPipeline:
                 return None, news, self._model_error(error, stage)
             return relevance.score * (0.5 if plausibility is None else plausibility), news, stage4
 
-        priority, news, out = self._task(body, None)
+        priority, news, out = item['ctx'].run(body, None)
         return {'assessed': [(idx, priority, news, out)]}
 
     def _rank_node(self, state: _NewsState) -> dict:
@@ -184,7 +181,7 @@ class InsightPipeline:
 
     def _judge_node(self, item: dict) -> dict:
         """Stages 5-6 for one top news: judge -> writer -> checker -> audit, as one result row."""
-        result, news = self._task(self._judge_body, item)
+        result, news = item['ctx'].run(self._judge_body, item)
         return {'judge_rows': [(item['pos'], self._record(news, **result))]}
 
     def _judge_body(self, item: dict) -> tuple[dict, dict]:
@@ -365,13 +362,15 @@ def build_e2e_graph(pipe: InsightPipeline, *, with_analytics: bool, run_analytic
     and the bank-analytics branch start together and join at `merge`; `save` is the last node. The CLI injects its
     own callables, so the graph also runs in tests with plain functions."""
     g = StateGraph(E2EState)
+    # the branches may run in parallel worker threads: each enters its own copy of the invoking thread's context
+    ctx_news, ctx_analytics = contextvars.copy_context(), contextvars.copy_context()
 
     def news_engine(s: E2EState) -> dict:
-        return {'news_results': pipe.run(s['company_id'], s['role'], s['n_candidates'], s['n_judge'],
-                                         retrieval=s['retrieval'], workers=s['workers'])}
+        return ctx_news.run(lambda: {'news_results': pipe.run(s['company_id'], s['role'], s['n_candidates'], s['n_judge'],
+                                                              retrieval=s['retrieval'], workers=s['workers'])})
 
     def analytics_node(s: E2EState) -> dict:
-        run, error = run_analytics_fn()
+        run, error = ctx_analytics.run(lambda: run_analytics_fn())
         return {'analytics': run, 'analytics_error': error}
 
     def merge(s: E2EState) -> dict:
