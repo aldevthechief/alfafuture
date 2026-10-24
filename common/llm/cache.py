@@ -1,8 +1,10 @@
-"""Answer caches on disk.
-`JsonlCache`: append-only key -> JSON value; each LLM answer per news / facet is paid for once and reused by every company.
-`FileLLMCache`: LangChain cache for every model call (prompt + model + params), plugged into all `ChatModels` models."""
+"""Answer caches: disk JSONL by default, one Redis for everything when ALFA_CACHE_REDIS_URL is set
+(the docker compose run shares the LLM cache and the named caches across containers; the Redis volume
+outlives restarts). `JsonlCache`: append-only key -> JSON value, reused by every company. `FileLLMCache`:
+LangChain cache for every model call (prompt + model + params), plugged into all `ChatModels` models."""
 import hashlib
 import json
+import os
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
@@ -14,8 +16,19 @@ from langchain_core.outputs import Generation
 from common.data import DATA
 
 
+def _redis(prefix: str):
+    """A shared Redis hash for `prefix` when ALFA_CACHE_REDIS_URL is set, else None."""
+    url = os.environ.get('ALFA_CACHE_REDIS_URL')
+    if not url:
+        return None
+    import redis  # only inside docker compose / an explicit opt-in
+    client = redis.Redis.from_url(url, decode_responses=True)
+    return client, f'alfa:{prefix}'
+
+
 class JsonlCache:
     def __init__(self, name: str, folder: Path = DATA / 'news' / 'llm_cache'):
+        self.name = name
         self.path = Path(folder) / f'{name}.jsonl'
         self._values: dict[str, Any] | None = None
 
@@ -75,4 +88,29 @@ class FileLLMCache(BaseCache):
         self.store._values = None
 
 
-LLM_CACHE = FileLLMCache()
+def _redis_llm_cache() -> BaseCache | None:
+    shared = _redis('llm')
+    if not shared:
+        return None
+    client, key = shared
+
+    class RedisLLMCache(BaseCache):
+        """Same request -> same answer from Redis, no API call; the volume keeps them across restarts."""
+
+        def lookup(self, prompt: str, llm_string: str) -> Sequence[Generation] | None:
+            v = client.hget(key, self_key(prompt, llm_string))
+            gens = loads(v, allowed_objects='all') if v is not None else None
+            return gens if gens and FileLLMCache.complete(gens) else None
+
+        def update(self, prompt: str, llm_string: str, return_val: Sequence[Generation]) -> None:
+            if FileLLMCache.complete(return_val):
+                client.hset(key, self_key(prompt, llm_string), dumps(list(return_val)))
+
+        def clear(self, **kwargs: Any) -> None:
+            client.delete(key)
+
+    self_key = staticmethod(FileLLMCache._key)
+    return RedisLLMCache()
+
+
+LLM_CACHE = _redis_llm_cache() or FileLLMCache()

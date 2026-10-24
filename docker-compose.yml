@@ -1,0 +1,18 @@
+services:
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes   # the volume keeps every cached answer across restarts
+    volumes:
+      - redis-data:/data
+  pipeline:
+    build: .
+    environment:
+      ALFA_CACHE_REDIS_URL: redis://redis:6379/0
+      CUDA_VISIBLE_DEVICES: "-1"
+    volumes:
+      - ./data:/app/data
+      - ./common/llm/.env:/app/common/llm/.env:ro
+    depends_on:
+      - redis
+volumes:
+  redis-data:
