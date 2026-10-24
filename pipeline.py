@@ -248,7 +248,8 @@ class InsightPipeline:
 def run_loop(company_id: str, role: str, models: ChatModels, n_candidates: int = 30, n_judge: int = 5,
              retrieval: str = 'v2', bank_review: bool = False, bank_budget: float | None = None,
              preparation: 'BankPreparationOptions | None' = None,
-             prepared_bank: 'PreparedBank | None' = None) -> list[dict]:
+             prepared_bank: 'PreparedBank | None' = None, workers: int = 1,
+             cards_dir: Path | None = None) -> list[dict]:
     from common.dedup import dedup_news
     from common.trace import AgentTrace
     from stage4_news_relevance.news_classifier.classifier import NewsClassifier
@@ -287,9 +288,14 @@ def run_loop(company_id: str, role: str, models: ChatModels, n_candidates: int =
     loop = AnalystLoop(library, pool, agent, InsightWriter(agent), trace=trace,
                        company_facts=facts, reviewer=BankReviewer(budget=bank_budget) if bank_review else None)
     results = []
-    for s in top:
+    card_traces = {}
+    shared_steps = list(trace.steps())
+    def analyze(s):
         row = rows_by_id[str(s['id'])]
-        result = loop.run(row, profile, role, s)
+        local_trace = trace if workers == 1 else AgentTrace()
+        active_loop = loop if workers == 1 else AnalystLoop(library, pool, agent, InsightWriter(agent),
+            trace=local_trace, company_facts=facts, reviewer=BankReviewer(budget=bank_budget) if bank_review else None)
+        result = active_loop.run(row, profile, role, s)
         result['matched_fragments'] = row.get('matched_fragments', [])
         if prepared is not None:
             result['bank_preparation'] = prepared.report
@@ -297,15 +303,25 @@ def run_loop(company_id: str, role: str, models: ChatModels, n_candidates: int =
             result['retrieval'] = {k: row[k] for k in ('event_id', 'event_news_ids', 'generators')}
         if isinstance(source_news, pd.DataFrame):
             result = bind_result(result, source_news, allow_unresolved=True)
-        results.append(result)
+        steps = shared_steps + list(local_trace.steps()) if workers > 1 else None
+        return result, steps
+    if workers < 1:
+        raise ValueError('workers must be positive')
+    with ThreadPoolExecutor(workers) as executor:
+        jobs=[executor.submit(contextvars.copy_context().run,analyze,score) for score in top]
+        for job in jobs:
+            result, steps = job.result()
+            results.append(result)
+            if steps is not None:
+                card_traces[str(result['news_id'])] = steps
         if isinstance(source_news, pd.DataFrame):
             results = [bind_result(r, source_news, allow_unresolved=True) for r in results]
-    cards = DATA / 'insights' / 'cards'
+    cards = cards_dir if cards_dir is not None else DATA / 'insights' / 'cards'
     cards.mkdir(parents=True, exist_ok=True)
     for r in results:
         source_id = r['thesis']['id'].replace(':', '_') if r.get('origin') == 'bank' else r['news_id']
         (cards / f'{company_id}_{role}_{source_id}.html').write_text(
-            render(json.loads(json.dumps(r, default=str)), trace.steps()), encoding='utf-8')
+            render(json.loads(json.dumps(r, default=str)), card_traces.get(str(r.get('news_id')), trace.steps())), encoding='utf-8')
     return results
 
 
@@ -483,7 +499,7 @@ if __name__ == '__main__':
         elif a.engine == 'loop':
             results = run_loop(a.company_id, a.role, models, a.candidates, a.judge, retrieval=a.retrieval,
                                bank_review=a.bank_review, bank_budget=a.bank_budget, preparation=preparation,
-                               prepared_bank=prepared_bank)
+                               prepared_bank=prepared_bank, workers=a.workers)
             results = [migrate_result(r, a.company_id) for r in results]  # contract v2 (a superset of the old one)
             out = _save_results(a.company_id, a.role, source_news, results)
         else:  # judge engine: the whole E2E is one LangGraph graph, the analytics branch runs in parallel with the news

@@ -27,3 +27,8 @@ sentence-transformers==5.1.1
 bm25s==0.2.14
 PyStemmer==3.0.0  # Snowball stems for BM25 (bank analytics search, retrieval eval); was installed by hand, not listed
 pymorphy3==2.0.4
+
+# REST API and Swagger
+fastapi==0.161.1
+uvicorn==0.54.0
+python-multipart==0.0.32

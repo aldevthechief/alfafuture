@@ -1,0 +1,8 @@
+Error 400: SyntaxError: Lexical error on line 1. Unrecognized text.
+flowchart:    curve: linear
+---------^
+Error: Syntax error in graph
+    at Worker.convert (file:///usr/local/kroki/src/worker.js:103:15)
+    at runNextTicks (node:internal/process/task_queues:65:5)
+    at process.processImmediate (node:internal/timers:502:9)
+    at async file:///usr/local/kroki/src/index.js:36:28

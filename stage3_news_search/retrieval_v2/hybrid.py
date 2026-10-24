@@ -4,7 +4,7 @@ over every (method, query) ranking; an event scores as its best news.
 Document vectors are cached by text hash in data/retrieval_v2/<model>.npz, so news ids may change (url-hash migration)
 and only new texts are encoded. A first full encode is slow on a small GPU: seed the cache from the Kaggle vectors
 python -X utf8 stage3_news_search/retrieval_v2/hybrid.py --seed experiments/retrieval/out"""
-import argparse, hashlib, re, sys
+import argparse, hashlib, re, sys, threading, tempfile
 from functools import lru_cache
 from pathlib import Path
 
@@ -29,8 +29,13 @@ def text_hash(text: str) -> str:
     return hashlib.sha1(text.encode('utf-8')).hexdigest()[:16]
 
 
-@lru_cache(None)
 def _encoder(slug: str):
+    with _cache_lock('encoder', slug):
+        return _cached_encoder(slug)
+
+
+@lru_cache(None)
+def _cached_encoder(slug: str):
     import torch
     from sentence_transformers import SentenceTransformer
     name, _, pad = MODELS[slug]
@@ -46,7 +51,20 @@ def encode(slug: str, texts: list[str], batch_size: int = 16) -> np.ndarray:
                                  show_progress_bar=len(texts) > 200).astype(np.float32)
 
 
+_CACHE_LOCKS = {}
+_CACHE_GUARD = threading.Lock()
+
+def _cache_lock(folder: str, slug: str):
+    with _CACHE_GUARD:
+        return _CACHE_LOCKS.setdefault((folder, slug), threading.RLock())
+
+
 def _load_cache(slug: str) -> dict[str, np.ndarray]:
+    with _cache_lock(str(CACHE.resolve()), slug):
+        return _read_cache(slug)
+
+
+def _read_cache(slug: str) -> dict[str, np.ndarray]:
     path = CACHE / f'{slug}.npz'
     if not path.exists():
         return {}
@@ -55,10 +73,20 @@ def _load_cache(slug: str) -> dict[str, np.ndarray]:
 
 
 def _save_cache(slug: str, cache: dict[str, np.ndarray]) -> None:
-    CACHE.mkdir(parents=True, exist_ok=True)
-    tmp = CACHE / f'{slug}.tmp.npz'
-    np.savez(tmp, hash=np.array(list(cache)), emb=np.stack(list(cache.values())).astype(np.float16))
-    tmp.replace(CACHE / f'{slug}.npz')  # atomic: a crash mid-write never leaves a broken cache
+    with _cache_lock(str(CACHE.resolve()), slug):
+        # Another task may have added different texts while this task was encoding.
+        merged = _read_cache(slug)
+        merged.update(cache)
+        if not merged:
+            return
+        CACHE.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(dir=CACHE, prefix=slug+'-', suffix='.npz', delete=False) as handle:
+            temp = Path(handle.name)
+        try:
+            np.savez(temp, hash=np.array(list(merged)), emb=np.stack(list(merged.values())).astype(np.float16))
+            temp.replace(CACHE / f'{slug}.npz')
+        finally:
+            temp.unlink(missing_ok=True)
 
 
 def doc_vectors(slug: str, texts: list[str], encoder=encode) -> np.ndarray:
