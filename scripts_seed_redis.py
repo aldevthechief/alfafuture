@@ -12,7 +12,11 @@ client = redis.Redis.from_url(url, decode_responses=True)
 
 def seed_hash(name: str, path: Path) -> None:
     n = 0
-    for line in path.read_text(encoding='utf-8').splitlines():
+    import gzip
+    opener = gzip.open if path.suffix == '.gz' else open
+    with opener(path, 'rt', encoding='utf-8') as f:
+        lines = f.read().splitlines()
+    for line in lines:
         if not line.strip():
             continue
         d = json.loads(line)
@@ -21,7 +25,8 @@ def seed_hash(name: str, path: Path) -> None:
     print(f'{name}: {n} entries')
 
 
-seed_hash('llm', Path(sys.argv[sys.argv.index('--llm') + 1] if '--llm' in sys.argv else 'data/llm_cache/llm.jsonl'))
+seed_hash('llm', Path(sys.argv[sys.argv.index('--llm') + 1] if '--llm' in sys.argv else 'data/llm_cache/llm.jsonl.gz'
+       if Path('data/llm_cache/llm.jsonl.gz').exists() else 'data/llm_cache/llm.jsonl'))
 for arg in sys.argv[1:]:
     if '=' in arg and not arg.startswith('--'):
         name, path = arg.split('=', 1)
