@@ -1,6 +1,7 @@
 // Our widgets inside the cabinet shell (index.html), client's point of view: one-line home block, «Инсайты» page
 // (feed, company profile with HITL questions) and the insight panel.
-// The shell owns company/role (window.demoContext, event 'demo:context'); data comes from public/feed.json.
+// The shell owns company/role (window.demoContext, event 'demo:context'). Insights come from the backend API (src/api.js):
+// the latest finished analysis of the company and role; until there is one, the demo public/feed.json (also roles and profile).
 import React, { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { createPortal } from 'react-dom';
@@ -12,14 +13,16 @@ import { SidePanel } from '@alfalab/core-components/side-panel';
 import { Typography } from '@alfalab/core-components/typography';
 import { Input } from '@alfalab/core-components/input';
 import { Plate } from '@alfalab/core-components/plate';
+import { API_ENABLED, companyFacts, latestJobs, startAnalysis, toFeed, waitJob } from './api';
 import './insights.css';
 
 const CONFIDENCE = { high: ['green', 'Уверенность высокая'], medium: ['orange', 'Уверенность средняя'], low: ['grey', 'Уверенность низкая'] };
 // feedback reason → pipeline stage it is routed to
 const REASONS = [['Не про нас', 'profile'], ['Уже знали', 'ranker'], ['Старая новость', 'news_search'], ['Ошибка в фактах', 'writer']];
 const TRACE = { plan: 'План', tool: 'Данные', check: 'Проверка' };
-const date = s => new Date(s).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
-const time = s => new Date(s).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+const valid = s => s && !isNaN(new Date(s));
+const date = s => valid(s) ? new Date(s).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' }) : '';
+const time = s => valid(s) ? new Date(s).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) : '';
 const Title = props => <Typography.Title font="system" {...props} />;
 // shortcut: feedback and profile answers only go to the console until the pipeline has an endpoint for them
 const send = (kind, payload) => console.info(kind, payload);
@@ -34,19 +37,58 @@ function useCtx() {
   return ctx;
 }
 
+// API state for the selected company and role: off | loading | none (no analysis yet) | running | ready | error
+function useLive(ctx) {
+  const [live, setLive] = useState({ state: API_ENABLED ? 'loading' : 'off' });
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    if (!API_ENABLED) return;
+    let stop = false;
+    const cancelled = () => stop;
+    const show = async job => {
+      const feed = toFeed(job, await companyFacts(ctx.company));
+      if (!stop) setLive(l => ({ ...l, state: 'ready', feed, job: job.id, error: null }));
+    };
+    const follow = async job => {
+      setLive(l => ({ ...l, state: 'running', error: null }));
+      const done = await waitJob(job.id, cancelled);
+      if (stop) return;
+      if (['succeeded', 'partial'].includes(done.status)) await show(done);
+      else setLive(l => ({ ...l, state: l.feed ? 'ready' : 'error', error: done.error || `Анализ: ${done.status}` }));
+    };
+    setLive({ state: 'loading' });
+    (async () => {
+      const { done, running } = await latestJobs(ctx.company, ctx.role);
+      if (done) await show(done);
+      else if (!stop) setLive({ state: 'none' });
+      if (running && !stop) await follow(running);
+    })().catch(e => !stop && setLive(l => ({ ...l, state: 'error', error: e.message })));
+    // run() bumps tick after POST so this effect follows the new job
+    return () => { stop = true; };
+  }, [ctx.company, ctx.role, tick]);
+  const run = () => startAnalysis(ctx.company, ctx.role).then(() => setTick(t => t + 1))
+    .catch(e => setLive(l => ({ ...l, state: 'error', error: e.message })));
+  return [live, run];
+}
+
 function App() {
   const ctx = useCtx();
   const [data, setData] = useState(null);
   const [open, setOpen] = useState(null);
   const [hidden, setHidden] = useState([]);
   const [answers, setAnswers] = useState({}); // company id → hypothesis id → {verdict, text}
+  const [live, run] = useLive(ctx);
+  useEffect(() => setOpen(null), [ctx.company, ctx.role]);
   useEffect(() => { fetch('feed.json').then(r => r.json()).then(setData); }, []);
   if (!data) return null;
 
   const company = data.companies[ctx.company];
-  const feed = company?.feeds[ctx.role];
+  const feed = live.feed || company?.feeds[ctx.role];
+  const sources = live.feed ? live.feed.sources : data.sources;
   const role = data.roles.find(r => r.id === ctx.role)?.name;
-  const visible = (feed?.insights || []).filter(i => !hidden.includes(i.id));
+  // API insights carry the role id
+  const visible = (feed?.insights || []).filter(i => !hidden.includes(i.id))
+    .map(i => ({ ...i, role: data.roles.find(r => r.id === i.role)?.name || i.role }));
   const hide = id => { setHidden(h => [...h, id]); setOpen(null); };
   const answer = (hid, a) => {
     send('profile_answer', { company: ctx.company, hypothesis: hid, ...a });
@@ -56,8 +98,8 @@ function App() {
 
   return <>
     {createPortal(<HomeWidget insights={visible} onOpen={setOpen} />, slot('insights-widget'))}
-    {createPortal(<Page {...{ company, feed, role, visible, hidden, answers: answers[ctx.company] || {}, answer, onOpen: setOpen, onRestore: () => setHidden([]) }} />, slot('insights-page'))}
-    <InsightPanel insight={open} sources={data.sources} onClose={() => setOpen(null)} onHide={hide} />
+    {createPortal(<Page {...{ company, feed, role, live, run, visible, hidden, answers: answers[ctx.company] || {}, answer, onOpen: setOpen, onRestore: () => setHidden([]) }} />, slot('insights-page'))}
+    <InsightPanel insight={open} sources={sources} onClose={() => setOpen(null)} onHide={hide} />
   </>;
 }
 
@@ -74,7 +116,21 @@ function HomeWidget({ insights, onOpen }) {
   </div>;
 }
 
-function Page({ company, feed, role, visible, hidden, answers, answer, onOpen, onRestore }) {
+const LIVE = { loading: 'Загружаем анализ…', none: 'Анализа ещё нет, показан пример', running: 'Идёт анализ новостей и аналитики Банка…',
+               error: 'Не удалось получить анализ, показан пример' };
+function LiveBar({ live, run }) {
+  if (live.state === 'off') return null;
+  const errors = live.feed?.errors || [];
+  return <div className="ip-live">
+    {live.state !== 'ready' && <Typography.Text view="primary-small" color="secondary">{LIVE[live.state]}</Typography.Text>}
+    {live.state === 'ready' && errors.length > 0 && <Status color="orange" size={20}>Часть источников не обработана</Status>}
+    {live.error && <Typography.Text view="primary-small" color="negative">{live.error}</Typography.Text>}
+    <Button size={32} view="secondary" loading={live.state === 'running'} disabled={live.state === 'loading'} onClick={run}>
+      {live.feed ? 'Обновить анализ' : 'Запустить анализ'}</Button>
+  </div>;
+}
+
+function Page({ company, feed, role, live, run, visible, hidden, answers, answer, onOpen, onRestore }) {
   const [tab, setTab] = useState('feed');
   const [filter, setFilter] = useState('all');
   const channels = [...new Set(visible.map(i => i.channel))];
@@ -82,7 +138,8 @@ function Page({ company, feed, role, visible, hidden, answers, answer, onOpen, o
   const questions = company ? company.profile.hypotheses.filter(h => !answers[h.id]).length : 0;
   return <div className="ip">
     <h1 className="h-sys">Инсайты</h1>
-    <p className="h-sub">Что в новостях важно для {company?.profile.name} · {role}{feed && ` · обновлено сегодня в ${time(feed.computed_at)}`}</p>
+    <p className="h-sub">Что в новостях важно для {company?.profile.name} · {role}{feed && ` · обновлено ${date(feed.computed_at)} в ${time(feed.computed_at)}`}</p>
+    <LiveBar live={live} run={run} />
     <Tabs selectedId={tab} onChange={(_, { selectedId }) => setTab(selectedId)} size="s">
       <Tab id="feed" title="События для вас">
         <div className="ip-filters">
@@ -112,7 +169,7 @@ function InsightCard({ insight: i, onOpen }) {
     </div>
     <Title tag="h3" view="small" weight="bold">{i.title}</Title>
     <Typography.Text view="primary-medium" color="secondary" tag="p">{i.why_it_matters[0]?.text}</Typography.Text>
-    <Typography.Text view="primary-small" weight="medium" tag="p">Почему сейчас: {i.why_now}</Typography.Text>
+    {i.why_now && <Typography.Text view="primary-small" weight="medium" tag="p">Почему сейчас: {i.why_now}</Typography.Text>}
   </button>;
 }
 
@@ -151,7 +208,7 @@ function InsightPanel({ insight: i, sources, onClose, onHide }) {
       <SidePanel.Content>
         <div className="panel">
           <Title tag="h2" view="small" weight="bold">{i.title}</Title>
-          <Typography.Text view="primary-small" color="secondary" tag="p">Почему сейчас: {i.why_now}</Typography.Text>
+          {i.why_now && <Typography.Text view="primary-small" color="secondary" tag="p">Почему сейчас: {i.why_now}</Typography.Text>}
 
           <Layer kind="fact" label="Факты · что произошло" claims={i.what_happened} sources={sources} />
           <Layer kind="ai" label="Вывод AI · почему это важно вам" claims={i.why_it_matters} sources={sources} />
@@ -187,17 +244,17 @@ function InsightPanel({ insight: i, sources, onClose, onHide }) {
               if (!s) return <li key={id} id={`src-${id}`}>{id}</li>;
               return <li key={id} id={`src-${id}`}>
                 {s.kind === 'fact' ? <><b>Данные компании:</b> {s.text}</>
-                  : <><b>{s.kind === 'bank' ? `Альфа-Банк, «${s.title}»` : s.outlet}</b>, {date(s.date)}{s.page && `, с. ${s.page}`}
+                  : <><b>{s.kind === 'bank' ? `Альфа-Банк, «${s.title}»` : s.outlet}</b>{s.date && `, ${date(s.date)}`}{s.page && `, с. ${s.page}`}
                     {s.kind === 'news' && <> — {s.url ? <a href={s.url} target="_blank" rel="noreferrer">{s.title}</a> : s.title}</>}
                     <br /><span className="snip">{s.snippet}</span></>}
               </li>;
             })}</ul>
           </section>
 
-          <details className="trace">
+          {i.trace.length > 0 && <details className="trace">
             <summary>Как мы пришли к выводу</summary>
             <ol>{i.trace.map((t, n) => <li key={n} className={`t-${t.status || t.kind}`}><span>{TRACE[t.kind]}</span>{t.text}</li>)}</ol>
-          </details>
+          </details>}
 
           <p className="ip-disclaimer">Не является инвестиционной рекомендацией.</p>
         </div>
