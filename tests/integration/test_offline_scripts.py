@@ -6,13 +6,13 @@ from pathlib import Path
 
 import pytest
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = [
-    'test_pipeline.py',
-    'common/test_roles.py',
-    'stage5_insight_detection/analytics_insights/test_agent.py',
-    'stage5_insight_detection/analytics_insights/test_service.py',
-    'stage5_insight_detection/analytics_insights/test_to_insight.py',
+    'tests/integration/test_pipeline.py',
+    'tests/unit/common/test_roles.py',
+    'tests/unit/stage5_insight_detection/test_agent.py',
+    'tests/unit/stage5_insight_detection/test_service.py',
+    'tests/unit/stage5_insight_detection/test_to_insight.py',
 ]
 
 

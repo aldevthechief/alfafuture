@@ -40,6 +40,13 @@ class JsonlCache:
         return self._load().get(key)
 
     def put(self, key: str, value: Any) -> None:
+        shared = _redis(self.name)
+        if shared:
+            client, hkey = shared
+            client.hset(hkey, key, json.dumps(value, ensure_ascii=False))
+            with _CACHE_LOCK:  # keep the in-process dict warm for the readers
+                self._load()[key] = value
+            return
         with _CACHE_LOCK:
             self._load()[key] = value
             self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -60,9 +67,16 @@ class JsonlCache:
             return value
 
     def _load(self) -> dict[str, Any]:
-        if self._values is None:
-            lines = self.path.read_text(encoding='utf-8').splitlines() if self.path.exists() else []
-            self._values = {d['key']: d['value'] for d in map(json.loads, filter(None, lines))}
+        if self._values is not None:
+            return self._values
+        shared = _redis(self.name)
+        if shared:
+            client, key = shared
+            with _CACHE_LOCK:
+                self._values = {k: json.loads(v) for k, v in client.hgetall(key).items()}
+            return self._values
+        lines = self.path.read_text(encoding='utf-8').splitlines() if self.path.exists() else []
+        self._values = {d['key']: d['value'] for d in map(json.loads, filter(None, lines))}
         return self._values
 
 

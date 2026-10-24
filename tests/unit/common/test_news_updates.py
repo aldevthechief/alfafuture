@@ -181,7 +181,7 @@ class UpdaterTests(unittest.TestCase):
         self.assertEqual(stop.wait.call_count, 2)
 
     def test_cli_help_is_offline_and_pipeline_exposes_retrieval(self):
-        root = Path(__file__).parent
+        root = Path(__file__).resolve().parents[3]
         for command in ([sys.executable, '-X', 'utf8', 'pipeline.py', '--help'],
                         [sys.executable, '-X', 'utf8', '-m', 'stage1_news_pool.updater', '--help']):
             result = subprocess.run(command, cwd=root, capture_output=True, text=True, encoding='utf-8', timeout=30)

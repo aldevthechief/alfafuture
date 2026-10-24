@@ -3,7 +3,7 @@ Insight by code only, hypotheses keep their matching. python -X utf8 stage5_insi
 import json, sys, tempfile
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from stage5_insight_detection.analytics_insights.agent import AnalyticsCandidate, AnalyticsTools, Finish
 from stage5_insight_detection.analytics_insights.to_insight import candidate_to_insight, run_to_analysis
 from stage5_insight_detection.bank_analytics.search import BankAnalytics
@@ -11,7 +11,7 @@ from stage6_insight_generation.insight_writer import insight as v1
 from stage6_insight_generation.insight_writer import insight_v2 as v2
 
 # 1. the news contract: every v1 insight of the demo feed survives v1 -> v2 -> v1 unchanged, and v1 JSON loads into v2 as it is
-feed = json.loads((Path(__file__).resolve().parents[2] / 'frontend/public/feed.json').read_text(encoding='utf-8'))
+feed = json.loads((Path(__file__).resolve().parents[3] / 'frontend/public/feed.json').read_text(encoding='utf-8'))
 found = []
 def walk(o):
     if isinstance(o, dict):

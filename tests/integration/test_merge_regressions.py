@@ -37,7 +37,7 @@ from common.llm import JsonlCache
 from common.llm.testing import ScriptedChatModel, calls, tool_call
 from stage4_news_relevance.consequence_extraction.consequences import ConsequenceExtractor
 
-ROOT = Path(__file__).parent
+ROOT = Path(__file__).resolve().parents[2]
 FACTS = [{'cat': 'activity', 'text': 'Основной вид деятельности: строительство', 'depth': 1,
           'entities': ['41.20', 'Строительство зданий']}]
 NEWS = pd.DataFrame([

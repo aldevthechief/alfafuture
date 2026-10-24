@@ -3,7 +3,7 @@ python -X utf8 common/llm/test_cache.py"""
 import sys, tempfile
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from langchain_core.messages import AIMessage
 from common.llm.cache import FileLLMCache
 from common.llm.testing import ScriptedChatModel, calls, tool_call

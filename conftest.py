@@ -1,16 +1,12 @@
-"""Pytest root: the repo root on sys.path, so tests import pipeline/common/stages directly.
-The old `python -X utf8 test_x.py` runners keep working: every file stays executable as a script."""
+"""Pytest root: the repo root on sys.path; the smoke scripts under tests/ stay out of direct collection
+(they run as subprocesses via tests/integration/test_offline_scripts.py)."""
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(ROOT))
 
-# Smoke scripts stay scripts (scripted models + real data, module-level body): the pytest wrapper below runs
-# them as subprocesses; direct collection would execute the whole script at import time.
-collect_ignore = [
-    'test_pipeline.py',
-    'common/test_roles.py',
-    'stage5_insight_detection/analytics_insights/test_agent.py',
-    'stage5_insight_detection/analytics_insights/test_service.py',
-    'stage5_insight_detection/analytics_insights/test_to_insight.py',
-]
+collect_ignore_glob = ['tests/integration/test_pipeline.py', 'tests/unit/common/test_roles.py',
+                       'tests/unit/stage5_insight_detection/test_agent.py',
+                       'tests/unit/stage5_insight_detection/test_service.py',
+                       'tests/unit/stage5_insight_detection/test_to_insight.py']

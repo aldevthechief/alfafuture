@@ -3,7 +3,7 @@ python -X utf8 common/test_roles.py"""
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from common.roles import role, role_channels, role_context, roles
 from stage3_news_search.facet_retrieval.candidates import CHANNELS
 

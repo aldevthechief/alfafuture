@@ -3,7 +3,7 @@ models, synthetic bank OCR in a temp folder (no network, data/ untouched). pytho
 import json, sys, tempfile
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 import common.llm.models as llm_models
 llm_models.LANGFUSE = []
 from common.llm import PromptLibrary

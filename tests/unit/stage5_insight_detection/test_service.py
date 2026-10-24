@@ -4,7 +4,7 @@ python -X utf8 stage5_insight_detection/analytics_insights/test_service.py"""
 import json, sys, tempfile
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 import common.llm.models as llm_models
 llm_models.LANGFUSE = []
 from common.llm.testing import ScriptedChatModel, calls, tool_call as c
@@ -17,7 +17,7 @@ from stage6_insight_generation.insight_writer import insight as v1
 from stage6_insight_generation.insight_writer import insight_v2 as v2
 
 # 1. news results migrate to v2 without losing anything; an insight already in v2 and one that does not parse are left alone
-feed = json.loads((Path(__file__).resolve().parents[2] / 'frontend/public/feed.json').read_text(encoding='utf-8'))
+feed = json.loads((Path(__file__).resolve().parents[3] / 'frontend/public/feed.json').read_text(encoding='utf-8'))
 found = []
 def walk(o):
     if isinstance(o, dict):

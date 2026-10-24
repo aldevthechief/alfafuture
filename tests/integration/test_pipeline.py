@@ -5,7 +5,7 @@ from pathlib import Path
 
 from langchain_core.messages import AIMessage
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import common.llm.models as llm_models
 llm_models.LANGFUSE = []  # offline test: agent runs attach Langfuse to their root trace, scripted calls must not be sent
 from common.llm import JsonlCache, PromptLibrary
@@ -16,7 +16,7 @@ from stage5_insight_detection.bank_analytics.search import BankAnalytics
 from stage2_company_facts.deterministic_facts.facts import build
 from stage3_news_search.retrieval import candidates
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parents[2]
 
 # every prompt file parses and renders with dummy variables
 for folder in ROOT.glob('stage*/**/prompts'):
