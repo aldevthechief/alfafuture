@@ -160,8 +160,9 @@ class InsightPipeline:
                 stage = 'consequences'
                 stage4 = {'matched_fragments': news.get('matched_fragments', []), 'relevance': relevance.model_dump(),
                           'consequences': self.consequences.extract(news), 'plausibility': plausibility}
-            except StructuredOutputError as error:
-                return None, news, self._model_error(error, stage)
+            except Exception as error:  # a dropped connection or a timeout loses this news, not the whole batch
+                return None, news, (self._model_error(error, stage) if isinstance(error, StructuredOutputError)
+                                    else {'stage': stage, 'type': type(error).__name__, 'message': str(error)[:500]})
             return relevance.score * (0.5 if plausibility is None else plausibility), news, stage4
 
         priority, news, out = item['ctx'].run(body, None)
@@ -233,8 +234,9 @@ class InsightPipeline:
                     result.update(insight=insight.model_dump(), audit=warnings)
                     if any(w['code'] in {'unknown_ref', 'no_source'} for w in warnings):
                         result.update(draft=result.pop('insight'), status='audit_rejected')
-        except StructuredOutputError as error:
-            result.update(status='model_error', error=self._model_error(error, stage))
+        except Exception as error:  # a dropped connection or a timeout loses this news, not the whole batch
+            result.update(status='model_error', error=self._model_error(error, stage) if isinstance(error, StructuredOutputError)
+                          else {'stage': stage, 'type': type(error).__name__, 'message': str(error)[:500]})
         return result, news
 
     def _collect_node(self, state: _NewsState) -> dict:
@@ -315,12 +317,14 @@ def optional_bank() -> BankAnalytics | None:
         return None
 
 
-def run_analytics(company_id: str, role: str, models: ChatModels, *, cache_only: bool = False, refresh: bool = False, bank: BankAnalytics | None = None):
+def run_analytics(company_id: str, role: str, models: ChatModels, *, cache_only: bool = False, refresh: bool = False,
+                  strict: bool = False, bank: BankAnalytics | None = None):
     """Insights from the bank's analytics: (AnalysisRun | None, error). Never raises: the news results must not depend on it."""
     from stage5_insight_detection.analytics_insights.service import analytics_run
     try:
         facts = load_company(company_id).facts
-        return analytics_run(company_id, role, facts, models=models, bank=bank or BankAnalytics(), cache_only=cache_only, refresh=refresh), ''
+        return analytics_run(company_id, role, facts, models=models, bank=bank or BankAnalytics(), cache_only=cache_only,
+                              refresh=refresh, strict=strict), ''
     except Exception as e:
         return None, f'{type(e).__name__}: {e}'
 
