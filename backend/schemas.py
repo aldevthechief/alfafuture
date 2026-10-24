@@ -71,3 +71,10 @@ class JobResponse(BaseModel):
     finished_at: str | None=None
     result: dict | list | None=None
     error: str | None=None
+
+class AskRequest(BaseModel):
+    """A reader's question about a finished insight; the answer streams over the saved result rows."""
+    company_id: str = Field(min_length=1, max_length=100, pattern=r'^[A-Za-z0-9_-]+$')
+    role: str = 'cfo'
+    question: str = Field(min_length=1, max_length=2000)
+    insight_title: str | None = None

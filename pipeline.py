@@ -378,7 +378,7 @@ class E2EState(_NewsState, total=False):
 
 
 def build_e2e_graph(pipe: InsightPipeline, *, with_analytics: bool, run_analytics_fn, analytics_rows_fn, migrate_fn,
-                    save_fn):
+                    save_fn, checkpointer=None):
     """The full judge-engine E2E as one LangGraph graph (langgraph-e2e-design.md): the news engine (itself a graph)
     and the bank-analytics branch start together and join at `merge`; `save` is the last node. The CLI injects its
     own callables, so the graph also runs in tests with plain functions."""
@@ -413,7 +413,7 @@ def build_e2e_graph(pipe: InsightPipeline, *, with_analytics: bool, run_analytic
     g.add_edge('news_engine', 'merge')
     g.add_edge('merge', 'save')
     g.add_edge('save', END)
-    return g.compile()
+    return g.compile(checkpointer=checkpointer)  # a checkpointer + config['configurable']['thread_id'] = job id -> resume after a crash
 
 
 def _save_results(company_id: str, role: str, source_news, rows: list[dict]):

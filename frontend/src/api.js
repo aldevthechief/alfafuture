@@ -87,3 +87,20 @@ export function toFeed(job, companyFacts = []) {
   return { computed_at: job.finished_at || job.created_at, insights, sources, status: job.status,
            errors: job.result?.errors || (job.error ? [{ component: 'job', message: job.error }] : []) };
 }
+
+// Ask a question about a finished insight: the answer streams token by token (POST /v1/insights/ask).
+export async function askInsight(company, role, question, insightTitle, onChunk, cancelled) {
+  const r = await fetch(BASE + '/v1/insights/ask', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ company_id: company, role, question, insight_title: insightTitle ?? null }),
+  });
+  if (!r.ok || !r.body) throw new Error(`${r.status} ${r.statusText}`);
+  const reader = r.body.getReader();
+  const decode = new TextDecoder();
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done || cancelled?.()) break;
+    onChunk(decode.decode(value, { stream: true }));
+  }
+}

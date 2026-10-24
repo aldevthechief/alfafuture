@@ -8,12 +8,13 @@ from typing import Annotated
 
 import pymupdf
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.responses import StreamingResponse
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import ValidationError
 
 from backend.jobs import QueueFull
-from backend.schemas import AnalysisRequest, BatchRequest, PreparationRequest, SearchRequest, JobResponse
+from backend.schemas import AnalysisRequest, AskRequest, BatchRequest, PreparationRequest, SearchRequest, JobResponse
 from backend.service import Service
 from common.roles import roles
 from stage5_insight_detection.bank_analytics.prepare import PreparationOptions
@@ -22,7 +23,7 @@ from stage5_insight_detection.bank_analytics.ocr import PDF_DIR
 def create_app(service=None, cors_origins=None):
     @asynccontextmanager
     async def lifespan(app):
-        app.state.service=service or Service()
+        app.state.service=service or Service(checkpointing=True)
         # Warm/import each original report independently in the background; uploaded PDFs never touch that folder.
         if service is None:
             for pdf in sorted(PDF_DIR.glob('*.pdf')):
@@ -127,6 +128,17 @@ def create_app(service=None, cors_origins=None):
     def bank_search(request: SearchRequest):
         version,library,bank=svc().catalog.snapshot(svc().models_factory())
         return dict(version=version,items=bank.search(request.query,request.k))
+
+    @app.post('/v1/insights/ask', response_class=StreamingResponse, tags=['agents'],
+              summary='Вопрос по готовому инсайту: ответ стримится токен за токеном')
+    def ask_question(body: AskRequest):
+        from backend.service import Service  # noqa: F401 - the request reaches the same service state
+        def gen():
+            try:
+                yield from svc().ask(body.company_id, body.role, body.question, body.insight_title)
+            except Exception as exc:
+                yield f'\n[ошибка] {type(exc).__name__}: {exc}'
+        return StreamingResponse(gen(), media_type='text/plain; charset=utf-8')
 
     @app.get('/v1/companies/{company_id}',tags=['companies'])
     def company(company_id: str):

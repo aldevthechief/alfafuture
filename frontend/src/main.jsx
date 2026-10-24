@@ -10,8 +10,10 @@ import { Status } from '@alfalab/core-components/status';
 import { Tag } from '@alfalab/core-components/tag';
 import { Tabs, Tab } from '@alfalab/core-components/tabs';
 import { SidePanel } from '@alfalab/core-components/side-panel';
+import { Spinner } from '@alfalab/core-components/spinner';
 import { Typography } from '@alfalab/core-components/typography';
 import { Input } from '@alfalab/core-components/input';
+import { askInsight } from './api.js';
 import { Plate } from '@alfalab/core-components/plate';
 import { API_ENABLED, companyFacts, latestJobs, startAnalysis, toFeed, waitJob } from './api';
 import './insights.css';
@@ -99,7 +101,7 @@ function App() {
   return <>
     {createPortal(<HomeWidget insights={visible} onOpen={setOpen} />, slot('insights-widget'))}
     {createPortal(<Page {...{ company, feed, role, live, run, visible, hidden, answers: answers[ctx.company] || {}, answer, onOpen: setOpen, onRestore: () => setHidden([]) }} />, slot('insights-page'))}
-    <InsightPanel insight={open} sources={sources} onClose={() => setOpen(null)} onHide={hide} />
+    <InsightPanel insight={open} sources={sources} company={ctx?.company} onClose={() => setOpen(null)} onHide={hide} />
   </>;
 }
 
@@ -190,16 +192,27 @@ function SourceRefs({ ids, sources }) {
   })}</span>;
 }
 
-function InsightPanel({ insight: i, sources, onClose, onHide }) {
+function InsightPanel({ insight: i, sources, onClose, onHide, company }) {
   const [vote, setVote] = useState(null);
   const [reason, setReason] = useState(null);
   const [q, setQ] = useState('');
   const [qa, setQa] = useState([]);
+  const [streaming, setStreaming] = useState(false);
   const [called, setCalled] = useState(false);
   useEffect(() => { setVote(null); setReason(null); setQa([]); setCalled(false); }, [i?.id]);
   const used = i ? [...new Set([i.what_happened, i.why_it_matters, i.risks, i.opportunities, i.hypotheses, i.bank_view].flat().flatMap(c => c.sources))] : [];
-  // shortcut: QA is a stub until the agent endpoint exists; then POST {insight_id, question}
-  const ask = () => { if (q.trim()) { setQa(a => [...a, [q, 'Ответ появится после подключения ассистента.']]); setQ(''); } };
+  // streamed answer over the saved insight rows (POST /v1/insights/ask); Spinner while the model reasons
+  const ask = () => {
+    if (!q.trim() || streaming) return;
+    const question = q;
+    setQ('');
+    setQa(a => [...a, [question, '']]);
+    setStreaming(true);
+    const append = text => setQa(a => { const c = [...a]; c[c.length - 1][1] += text; return c; });
+    askInsight(company || window.demoContext?.company, i.role, question, i.title, append)
+      .catch(e => append(` [нет ответа: ${e.message}]`))
+      .finally(() => setStreaming(false));
+  };
   const rate = (v, r) => { setVote(v); setReason(r); if (v === 'yes' || r) send('feedback', { insight: i.id, vote: v, stage: REASONS.find(x => x[0] === r)?.[1] }); };
 
   return <SidePanel open={!!i} onClose={onClose} size={500} hasCloser>
@@ -232,7 +245,9 @@ function InsightPanel({ insight: i, sources, onClose, onHide }) {
 
           <section className="layer">
             <Typography.Text view="caps" weight="bold" tag="div">Вопрос по событию</Typography.Text>
-            {qa.map(([qq, a], n) => <p key={n} className="qa"><b>{qq}</b><br />{a}</p>)}
+            {qa.map(([qq, a], n) => <p key={n} className="qa"><b>{qq}</b><br />{a}
+              {streaming && n === qa.length - 1 && <Spinner size="s" visible />}</p>)}
+            {streaming && qa.length === 0 && <p className="qa"><Spinner size="s" visible /></p>}
             <Input block size={48} placeholder="Например: что будет, если ЦБ снизит ставку?" value={q}
               onChange={e => setQ(e.target.value)} onKeyDown={e => e.key === 'Enter' && ask()} />
           </section>
