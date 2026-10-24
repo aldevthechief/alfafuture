@@ -22,6 +22,7 @@ scored by the batch classifier (scores only), and the top news go through bank m
 consequences -> grounds check -> data requests -> verdict -> writer -> audit; journal in data/traces/<run>.jsonl.
 """
 import argparse, contextvars, json, math, operator, sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Annotated, TYPE_CHECKING, TypedDict
 
