@@ -5,6 +5,7 @@ COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
 COPY frontend/ ./
 ENV VITE_API_URL=.
+ENV VITE_FEEDBACK_API=/feedback
 RUN npm run build
 
 FROM nginx:1.27-alpine

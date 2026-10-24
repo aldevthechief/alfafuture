@@ -1,7 +1,8 @@
 """Flag-driven bank preparation and evidence delivery. Synthetic PDFs/models only, no network."""
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import ExitStack, redirect_stderr, redirect_stdout
 from io import StringIO
 import json
+import os
 from pathlib import Path
 import runpy
 import sys
@@ -55,6 +56,39 @@ class FakeReader:
 
 
 class PreparationTests(unittest.TestCase):
+    def test_chart_mode_freezes_environment_and_explicit_value_wins(self):
+        with patch.dict(os.environ, {'BANK_CHARTS':'selective'}):
+            options = PreparationOptions()
+            self.assertEqual(options.chart_mode, 'selective')
+            self.assertEqual(PreparationOptions(chart_mode='all').chart_mode, 'all')
+        with patch.dict(os.environ, {'BANK_CHARTS':'off'}):
+            self.assertEqual(options.chart_mode, 'selective')
+        with self.assertRaises(ValueError):
+            PreparationOptions(chart_mode='unknown')
+
+    def test_chart_mode_reaches_reading_library_and_digest_export(self):
+        for mode in ('all', 'selective', 'off'):
+            with self.subTest(mode=mode), TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                self.make_pdf(root)
+                models = SimpleNamespace(callbacks=[],
+                    vision=lambda: ScriptedChatModel(responses=[AIMessage(content=PAGE)]),
+                    agent=lambda: ScriptedChatModel(responses=[calls(tool_call('ReportDigest', summary='Обзор ставки'))]))
+                with patch.dict(os.environ, {'BANK_CHARTS':'off' if mode != 'off' else 'all'}), \
+                     patch.object(prepare, 'check_local_ocr') as local_ocr, \
+                     patch.object(prepare, 'read_charts', return_value={}) as read, \
+                     patch.object(BankLibrary, 'refresh', wraps=BankLibrary.refresh) as refresh, \
+                     patch.object(prepare, 'export', wraps=prepare.export) as export, redirect_stdout(StringIO()):
+                    result = prepare_bank(PreparationOptions(charts=True, digests=True, chart_mode=mode), models, pdf_dir=root)
+                self.assertEqual(result.report['status'], 'complete')
+                self.assertEqual(result.report['options']['chart_mode'], mode)
+                self.assertEqual(read.call_args.kwargs['charts'], mode)
+                self.assertTrue(all(call.kwargs['charts'] == mode for call in refresh.call_args_list))
+                self.assertEqual(export.call_args.kwargs['charts'], mode)
+                self.assertEqual(local_ocr.call_count, int(mode != 'off'))
+                if mode == 'off':
+                    self.assertFalse(any(f.kind == 'chart' for f in result.library.fragments))
+
     def test_malformed_chart_series_is_not_accepted_as_verified_input(self):
         self.assertTrue(charts.valid_answer('ocr_chart', CHART))
         self.assertFalse(charts.valid_answer('ocr_chart', dict(CHART,series=['broken'])))
@@ -157,48 +191,60 @@ class PreparationTests(unittest.TestCase):
 
 
 class FlagTests(unittest.TestCase):
-    def test_actual_cli_flags_deliver_prepared_library_to_this_loop(self):
-        variants=[(['--bank-charts'],(True,False,False)), (['--bank-tables'],(False,True,False)),
-                  (['--bank-digest'],(False,False,True)),
+    def test_actual_cli_flags_prepare_bank_before_this_judge(self):
+        variants=[(['--bank-charts','--chart-mode','selective'],(True,False,False)),
+                  (['--bank-tables'],(False,True,False)), (['--bank-digest'],(False,False,True)),
+                  (['--ocr'],(False,False,False)), (['--ocr','--chart-mode','off'],(False,False,False)),
                   (['--bank-prepare','--ocr','--ocr-budget','0','--charts-budget','0','--tables-budget','0','--digest-budget','0'],(True,True,True))]
+        class Related:
+            news = NEWS
+            def __init__(self,*args,**kwargs): pass
+            def refresh(self): pass
+            def event_plausibility(self,news_id): return 1.0
         for flags,enabled in variants:
-            with self.subTest(flags=flags), TemporaryDirectory() as tmp:
-                lib=BankLibrary([])
+            with self.subTest(flags=flags), TemporaryDirectory() as tmp, ExitStack() as stack:
                 report=dict(status='complete',stages=[])
                 order=[]
-                model=ScriptedChatModel(responses=[calls(tool_call('scores',items=[dict(index=0,category='отрасль',sentiment='neutral',importance=4)]))])
+                lib=BankLibrary([])
+                bank=Mock()
+                model=ScriptedChatModel(responses=[])
                 models=SimpleNamespace(cheap=lambda **kw:model,agent=lambda **kw:model)
-                args=['pipeline.py','synthetic','--engine','loop','--retrieval','lexical',*flags]
-                fake_loop=Mock(run=Mock(return_value=dict(news_id=41,verdict={'status':'reject'})))
-                with patch.object(sys,'argv',args), patch('common.data.DATA',Path(tmp)), \
-                     patch('common.search.news_pool',return_value=NEWS),patch('common.llm.ChatModels',return_value=models), \
-                     patch('common.trace.AgentTrace',return_value=AgentTrace(folder=None)), \
-                     patch('stage2_company_facts.deterministic_facts.facts.build',return_value={'synthetic':[]}), \
-                     patch('stage3_news_search.retrieval.candidates',return_value=(NEWS.head(1),[])), \
-                     patch.object(prepare,'prepare_bank',side_effect=lambda *a,**kw: (order.append('prepare'),PreparedBank(lib,report))[1]) as preparation, \
-                     patch('stage5_insight_detection.bank_analytics.search.BankAnalytics',side_effect=lambda: (order.append('search'),Mock())[1]), \
-                     patch('stage5_insight_detection.analytics_insights.service.analytics_run',return_value=None), \
-                     patch('stage5_insight_detection.bank_analytics.ocr.AnalyticsOCR') as old_ocr, \
-                     patch('stage5_insight_detection.analyst_loop.pool.RelatedNewsPool',return_value=SimpleNamespace(related=SimpleNamespace(news=NEWS))), \
-                     patch.object(pipeline,'DATA',Path(tmp)), \
-                     patch('stage2_company_facts.profile.integration.load_profile',return_value=profile_snapshot(profile(), [])), \
-                     patch('stage5_insight_detection.analyst_loop.loop.AnalystLoop',return_value=fake_loop) as loop, \
-                     patch('stage6_insight_generation.insight_card.render.render',return_value='<html></html>'), redirect_stdout(StringIO()):
-                    runpy.run_path('pipeline.py',run_name='__main__')
-                old_ocr.assert_not_called()
+                scorer=SimpleNamespace(score=lambda *a:SimpleNamespace(score=2,channel='',model_dump=lambda:{'score':2}))
+                judge=Mock(decide=Mock(return_value=SimpleNamespace(is_insight=False,bank_evidence=[],
+                    calculation_facts=[],calculation_bank=[],model_dump=lambda:{'is_insight':False})))
+                args=['pipeline.py','synthetic','--engine','judge','--source','news','--retrieval','lexical',*flags]
+                patches=[patch.object(sys,'argv',args), patch('common.data.DATA',Path(tmp)),
+                    patch('common.search.news_pool',return_value=NEWS), patch('common.llm.ChatModels',return_value=models),
+                    patch('stage2_company_facts.deterministic_facts.facts.build',return_value={'synthetic':[]}),
+                    patch('stage3_news_search.retrieval.candidates',return_value=(NEWS.head(1),[])),
+                    patch('stage5_insight_detection.bank_analytics.search.BankAnalytics',side_effect=lambda:(order.append('search'),bank)[1]),
+                    patch('stage5_insight_detection.news_enrichment.related_news.RelatedNews',Related),
+                    patch('stage4_news_relevance.relevance_scoring.relevance.RelevanceScorer',return_value=scorer),
+                    patch('stage4_news_relevance.consequence_extraction.consequences.ConsequenceExtractor',return_value=SimpleNamespace(extract=lambda n:{}))]
+                for p in patches: stack.enter_context(p)
+                preparation=stack.enter_context(patch.object(prepare,'prepare_bank',
+                    side_effect=lambda *a,**kw:(order.append('prepare'),PreparedBank(lib,report))[1]))
+                judge_factory=stack.enter_context(patch('stage5_insight_detection.insight_judge.judge.InsightJudge',return_value=judge))
+                loop=stack.enter_context(patch('stage5_insight_detection.analyst_loop.loop.AnalystLoop'))
+                stack.enter_context(redirect_stdout(StringIO()))
+                runpy.run_path('pipeline.py',run_name='__main__')
                 options=preparation.call_args.args[0]
                 self.assertEqual(preparation.call_count,1)
+                self.assertTrue(options.ocr)
                 self.assertEqual(order,['prepare','search'])
                 self.assertEqual((options.charts,options.tables,options.digests),enabled)
+                if '--chart-mode' in flags: self.assertEqual(options.chart_mode,flags[flags.index('--chart-mode')+1])
                 if '--bank-prepare' in flags: self.assertEqual(options.ocr_budget,0)
-                self.assertIs(loop.call_args.args[0],lib)
+                self.assertIs(judge_factory.call_args.args[2],bank)
+                judge.decide.assert_called_once()
+                loop.assert_not_called()
                 saved=json.loads((Path(tmp)/'insights/synthetic_cfo.json').read_text())
                 self.assertEqual(saved[0]['bank_preparation'],report)
 
     def test_invalid_flags_fail_before_models_or_preparation(self):
-        cases=[['--bank-prepare'], ['--engine','loop','--charts-budget','2'],
-               ['--engine','loop','--bank-charts','--charts-budget','-1'],
-               ['--engine','loop','--bank-tables','--tables-budget','nan']]
+        cases=[['--engine','loop'], ['--loop'], ['--bank-review'], ['--bank-budget','1'], ['--chart-mode','selective'],
+               ['--bank-charts','--chart-mode','unknown'], ['--charts-budget','2'],
+               ['--bank-charts','--charts-budget','-1'], ['--bank-tables','--tables-budget','nan']]
         for flags in cases:
             with self.subTest(flags=flags),patch.object(sys,'argv',['pipeline.py','synthetic',*flags]), \
                  patch('common.llm.ChatModels') as models,patch.object(prepare,'prepare_bank') as preparation, \

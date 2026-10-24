@@ -13,15 +13,14 @@ from the committed cache (analytics_insights/cache/) while its inputs are unchan
 among all (at least 1, at most that share). Every `insight` of the saved results is in contract v2 (insight_writer/insight_v2.py),
 a superset of the old one: news insights keep all their fields.
 
-Both engines use retrieval v2 by default (standard generators + generator factory over e5 + qwen + BM25; the factory
+The judge engine uses retrieval v2 by default (standard generators + generator factory over e5 + qwen + BM25; the factory
 runs GLM once per company, ~4 ₽, then is cached): --retrieval hybrid = standard generators over FRIDA + TF-IDF,
 lexical = the facet search. --candidates limits distinct events in v2 / hybrid mode. Event membership is prepared/rebuilt automatically from the corpus.
 
---engine loop: stages 4-6 by the analyst loop (stage5_insight_detection/analyst_loop): the shortlist is deduplicated,
-scored by the batch classifier (scores only), and the top news go through bank match -> news pool -> computed
-consequences -> grounds check -> data requests -> verdict -> writer -> audit; journal in data/traces/<run>.jsonl.
+CLI/API only run the judge engine. The legacy run_loop() and its modules remain for direct development use;
+shared computations and audit are still used by judge. PDF preparation runs before the judge graph.
 """
-import argparse, contextvars, json, math, operator, sys
+import argparse, contextvars, hashlib, json, math, operator, sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Annotated, TYPE_CHECKING, TypedDict
@@ -43,6 +42,8 @@ from common.news_corpus import StaleNewsReferences, bind_result, save_results
 from common.roles import roles
 from common.search import corpus_fingerprint, news_pool
 from common.news_snapshot import pinned_run, news_snapshot
+from common.personalization import Personalization, load_personalization
+from common.safety import render_untrusted
 from stage2_company_facts.deterministic_facts.facts import build
 from stage3_news_search.retrieval import candidates
 from stage4_news_relevance.consequence_extraction.consequences import ConsequenceExtractor
@@ -68,6 +69,21 @@ class _NewsState(TypedDict, total=False):
     news_results: Annotated[list[dict], operator.add]
 
 
+def scoped_personalization(value: Personalization | None, company_id: str, role: str) -> Personalization | None:
+    if value is None:
+        return None
+    if (value.company_id, value.role) != (company_id, role):
+        raise ValueError('Personalization company and role must match this analysis')
+    return value.model_copy(deep=True) if not value.empty() else None
+
+
+def personalization_context(value: Personalization | None) -> str:
+    if value is None or not (value.notes or value.topic_weights):
+        return ''
+    return render_untrusted('user_context', 'Со слов пользователя: не проверенные факты и не позиция Банка',
+                            value.render(), body_limit=16000)
+
+
 class InsightPipeline:
     def __init__(self, cheap: BaseChatModel, agent: BaseChatModel, consequences: ConsequenceExtractor | None = None,
                  bank: BankAnalytics | None = None, related: RelatedNews | None = None):
@@ -82,11 +98,13 @@ class InsightPipeline:
 
     @pinned_run
     def run(self, company_id: str, role: str, n_candidates: int = 30, n_judge: int = 5,
-            retrieval: str = 'v2', workers: int = 1) -> list[dict]:
+            retrieval: str = 'v2', workers: int = 1, personalization: Personalization | None = None) -> list[dict]:
         """LangGraph news engine: stage 4 and stages 5-6 run as parallel `Send` tasks (max_concurrency=workers);
         the joins rank by the retrieval input index, so workers=1 keeps the call order deterministic for scripted
         test models exactly as the thread pool did."""
-        self._params = {'company_id': company_id, 'role': role, 'n_judge': n_judge}
+        pers = scoped_personalization(personalization, company_id, role)
+        self._params = {'company_id': company_id, 'role': role, 'n_judge': n_judge,
+                        'personalization': pers, 'user_context': personalization_context(pers)}
         rows = self._prepare(company_id, role, n_candidates, retrieval)
         state = self.news_graph().invoke({'rows': rows}, config={'max_concurrency': max(1, workers)})
         return state['news_results']
@@ -130,6 +148,11 @@ class InsightPipeline:
                             # get all of them too (key facts only -> the checker rejected group and payment figures)
                             all_facts=[f'[{f["cat"]}] {f["text"]}' for f in facts])
         shortlist, _ = candidates(company_id, role, top=n_candidates, facts=facts, method=retrieval)  # stage 3
+        pers = self._params['personalization']
+        if pers is not None:
+            shortlist = shortlist[~shortlist['id'].astype(int).isin(pers.excluded_news_ids)]
+            if self._params['user_context']:
+                self._params['key_facts'].append(self._params['user_context'])
         if isinstance(self.related, RelatedNews) and shortlist.attrs.get(
                 'corpus_fingerprint', corpus_fingerprint(self.related.news)) != corpus_fingerprint(self.related.news):
             raise StaleNewsReferences('News changed during retrieval; restart the batch')
@@ -161,10 +184,16 @@ class InsightPipeline:
                 stage = 'consequences'
                 stage4 = {'matched_fragments': news.get('matched_fragments', []), 'relevance': relevance.model_dump(),
                           'consequences': self.consequences.extract(news), 'plausibility': plausibility}
+                priority = relevance.score * (0.5 if plausibility is None else plausibility)
+                if p['personalization'] is not None:
+                    stage4['personalization_factor'] = p['personalization'].factor(news, relevance.channel)
+                    priority *= stage4['personalization_factor']
+                    if p['user_context']:
+                        stage4['user_context'] = p['user_context']
             except Exception as error:  # a dropped connection or a timeout loses this news, not the whole batch
                 return None, news, (self._model_error(error, stage) if isinstance(error, StructuredOutputError)
                                     else {'stage': stage, 'type': type(error).__name__, 'message': str(error)[:500]})
-            return relevance.score * (0.5 if plausibility is None else plausibility), news, stage4
+            return priority, news, stage4
 
         priority, news, out = item['ctx'].run(body, None)
         return {'assessed': [(idx, priority, news, out)]}
@@ -201,6 +230,8 @@ class InsightPipeline:
                 result['calculations'] = calculations
                 result['calculation_bank'] = decision.calculation_bank
             if decision.is_insight:                                                   # stage 6
+                # Preserve the original numbering for discussion even if company tables later change.
+                result['evidence_facts'] = list(all_facts)
                 related = [self.related.get(i) for i in decision.related_news_ids[:3] if i in self.related.row_of]
                 # Reuse the exact sources read by the judge (hits, neighbours, compared tables).
                 # A fresh mechanism query is only a fallback when the judge read no bank material.
@@ -215,6 +246,13 @@ class InsightPipeline:
                                                                                             *decision.calculation_bank]}))
                 result |= {'insight' if review.ok else 'draft': insight.model_dump(),
                            'review': review.model_dump(), 'status': 'ready' if review.ok else 'review_rejected'}
+                from common.evidence import EvidenceSnapshot
+                # Capture the actual run's sources now; importing the card must not reread changed company/news data.
+                writer_news = {int(n['id']): n for n in [news, *related]}
+                result['evidence'] = EvidenceSnapshot.from_result(
+                    dict(result, news_id=news['id'], bank=bank), company_id, role,
+                    news_lookup=writer_news.get,
+                    facts=facts).model_dump(mode='json')
                 if review.ok:
                     from stage5_insight_detection.analyst_loop.audit import audit
                     from stage5_insight_detection.analyst_loop.verdict import InsightBrief
@@ -250,7 +288,7 @@ def run_loop(company_id: str, role: str, models: ChatModels, n_candidates: int =
              retrieval: str = 'v2', bank_review: bool = False, bank_budget: float | None = None,
              preparation: 'BankPreparationOptions | None' = None,
              prepared_bank: 'PreparedBank | None' = None, workers: int = 1,
-             cards_dir: Path | None = None) -> list[dict]:
+             cards_dir: Path | None = None, personalization: Personalization | None = None) -> list[dict]:
     from common.dedup import dedup_news
     from common.trace import AgentTrace
     from stage4_news_relevance.news_classifier.classifier import NewsClassifier
@@ -260,6 +298,7 @@ def run_loop(company_id: str, role: str, models: ChatModels, n_candidates: int =
     from stage5_insight_detection.bank_analytics.library import BankLibrary
     from stage5_insight_detection.bank_analytics.review import BankReviewer
     from stage6_insight_generation.insight_card.render import render
+    pers = scoped_personalization(personalization, company_id, role)
     trace = AgentTrace()
     prepared = prepared_bank
     if prepared is not None:
@@ -277,12 +316,22 @@ def run_loop(company_id: str, role: str, models: ChatModels, n_candidates: int =
         if shortlist.attrs.get('corpus_fingerprint', corpus_fingerprint(pool.related.news)) != corpus_fingerprint(pool.related.news):
             raise StaleNewsReferences('News changed during retrieval; restart the batch')
     rows = shortlist.to_dict('records')
+    if pers is not None:
+        excluded = set(pers.excluded_news_ids)
+        rows = [r for r in rows if int(r['id']) not in excluded]
     if retrieval == 'lexical':
         rows = dedup_news(rows)
     rows_by_id = {str(r['id']): r for r in rows}
     trace.log('shortlist', candidates=len(shortlist), after_dedup=len(rows))
-    scored = NewsClassifier(models.cheap(max_tokens=1500), trace=trace).classify(rows, profile.card())
+    card = profile.card()
+    if context := personalization_context(pers):
+        card += '\n\n' + context
+    scored = NewsClassifier(models.cheap(max_tokens=1500), trace=trace).classify(rows, card)
     scored = [s for s in scored if role in s['affected_roles'] or not s['affected_roles']] or scored
+    if pers is not None:
+        for score in scored:
+            score['personalization_factor'] = pers.factor(rows_by_id[str(score['id'])], score.get('channel', ''))
+            score['importance'] *= score['personalization_factor']
     top = sorted(scored, key=lambda s: -s['importance'])[:n_judge]
     library = prepared.library if prepared is not None else BankLibrary.refresh()
     agent = models.agent()  # default reasoning and the 64k cap: a small cap cut GLM's answers (reasoning counts toward it)
@@ -297,6 +346,8 @@ def run_loop(company_id: str, role: str, models: ChatModels, n_candidates: int =
         active_loop = loop if workers == 1 else AnalystLoop(library, pool, agent, InsightWriter(agent),
             trace=local_trace, company_facts=facts, reviewer=BankReviewer(budget=bank_budget) if bank_review else None)
         result = active_loop.run(row, profile, role, s)
+        if pers is not None:
+            result['personalization_factor'] = s['personalization_factor']
         result['matched_fragments'] = row.get('matched_fragments', [])
         if prepared is not None:
             result['bank_preparation'] = prepared.report
@@ -371,6 +422,7 @@ class E2EState(_NewsState, total=False):
     n_judge: int
     retrieval: str
     workers: int
+    personalization: dict | None
     analytics: object          # AnalysisRun | None of the parallel bank-analytics branch
     analytics_error: str
     results: list[dict]        # final rows: news (contract v2) + analytics within the quota
@@ -387,8 +439,11 @@ def build_e2e_graph(pipe: InsightPipeline, *, with_analytics: bool, run_analytic
     ctx_news, ctx_analytics = contextvars.copy_context(), contextvars.copy_context()
 
     def news_engine(s: E2EState) -> dict:
+        kwargs = {}
+        if s.get('personalization') is not None:
+            kwargs['personalization'] = Personalization.model_validate(s['personalization'])
         return ctx_news.run(lambda: {'news_results': pipe.run(s['company_id'], s['role'], s['n_candidates'], s['n_judge'],
-                                                              retrieval=s['retrieval'], workers=s['workers'])})
+                                                              retrieval=s['retrieval'], workers=s['workers'], **kwargs)})
 
     def analytics_node(s: E2EState) -> dict:
         run, error = ctx_analytics.run(lambda: run_analytics_fn())
@@ -416,8 +471,9 @@ def build_e2e_graph(pipe: InsightPipeline, *, with_analytics: bool, run_analytic
     return g.compile(checkpointer=checkpointer)  # a checkpointer + config['configurable']['thread_id'] = job id -> resume after a crash
 
 
-def _save_results(company_id: str, role: str, source_news, rows: list[dict]):
-    out = DATA / 'insights' / f'{company_id}_{role}.json'
+def _save_results(company_id: str, role: str, source_news, rows: list[dict], user_id: str | None = None):
+    suffix = '_' + hashlib.sha256(user_id.encode()).hexdigest()[:12] if user_id else ''
+    out = DATA / 'insights' / f'{company_id}_{role}{suffix}.json'
     out.parent.mkdir(parents=True, exist_ok=True)
     if corpus_fingerprint(source_news) != corpus_fingerprint(news_pool()):
         raise StaleNewsReferences('News changed while the pipeline was running; restart the batch before saving')
@@ -429,10 +485,11 @@ if __name__ == '__main__':
     ap = argparse.ArgumentParser()
     ap.add_argument('company_id')
     ap.add_argument('--role', default='cfo', choices=list(roles()))
+    ap.add_argument('--user-id', default=None, help='apply this user\'s feedback for this company and role')
     ap.add_argument('--candidates', type=int, default=30)
     ap.add_argument('--judge', type=int, default=5)
     ap.add_argument('--workers', type=int, default=8, help='judge engine: news processed in parallel (LLM calls in flight)')
-    ap.add_argument('--engine', choices=['judge', 'loop'], default='judge', help='loop = analyst loop of stage 5')
+    ap.add_argument('--engine', choices=['judge'], default='judge', help='judge is the only public engine')
     ap.add_argument('--retrieval', choices=['v2', 'v3', 'hybrid', 'lexical'], default='v2',
                     help='v2 = standard generators + generator factory (e5 + qwen + BM25); v3 = v2 + news-first channel generators; '
                          'hybrid = FRIDA + TF-IDF; lexical = facet search')
@@ -445,44 +502,40 @@ if __name__ == '__main__':
     ap.add_argument('--analytics-refresh', action='store_true', help='analytics: ignore the cache and run the agent')
     ap.add_argument('--analytics-share', type=float, default=0.4, help='analytics: at most this share of all ready insights (and at least one)')
     ap.add_argument('--ocr', action='store_true', help='OCR bank analytics PDFs and rebuild the bank library first')
-    ap.add_argument('--bank-charts', action='store_true', help='loop: full OCR and verify/digitize charts before analysis')
-    ap.add_argument('--bank-tables', action='store_true', help='loop: full OCR and reconcile table cells before analysis')
-    ap.add_argument('--bank-digest', action='store_true', help='loop: full OCR and checked report digests before analysis')
-    ap.add_argument('--bank-prepare', action='store_true', help='loop: full OCR, charts, tables and digests in this run')
+    ap.add_argument('--bank-charts', action='store_true', help='full OCR and verify/digitize charts before judge')
+    ap.add_argument('--bank-tables', action='store_true', help='full OCR and reconcile table cells before judge')
+    ap.add_argument('--bank-digest', action='store_true', help='full OCR and checked report digests before judge')
+    ap.add_argument('--bank-prepare', action='store_true', help='full OCR, charts, tables and digests before judge')
+    ap.add_argument('--chart-mode', choices=['all', 'selective', 'off'], default=None,
+                    help='chart selection during bank preparation (default BANK_CHARTS or all)')
     ap.add_argument('--ocr-budget', type=budget_arg, default=None, help='OCR stage budget, rubles; full preparation default 15')
     ap.add_argument('--charts-budget', type=budget_arg, default=None, help='chart stage budget, rubles; default 8')
     ap.add_argument('--tables-budget', type=budget_arg, default=None, help='table stage budget, rubles; default 7')
     ap.add_argument('--digest-budget', type=budget_arg, default=None, help='digest stage budget, rubles; default 3')
-    ap.add_argument('--bank-review', action='store_true', help='loop: additionally filter bank fragments with the bank analyst agent')
-    ap.add_argument('--bank-budget', type=float, default=None, help='bank reviewer budget in rubles for this run')
     a = ap.parse_args()
+    try:
+        personalization = load_personalization(a.user_id, a.company_id, a.role) if a.user_id else None
+    except ValueError as error:
+        ap.error(str(error))
     do_charts, do_tables, do_digest = a.bank_charts or a.bank_prepare, a.bank_tables or a.bank_prepare, a.bank_digest or a.bank_prepare
     prepare_requested = do_charts or do_tables or do_digest
-    if prepare_requested and a.engine != 'loop':
-        ap.error('--bank-prepare/--bank-charts/--bank-tables/--bank-digest require --engine loop')
+    if a.chart_mode is not None and not (prepare_requested or a.ocr):
+        ap.error('--chart-mode requires --ocr/--bank-charts/--bank-tables/--bank-digest/--bank-prepare')
     for flag, value, enabled in (('--ocr-budget', a.ocr_budget, a.ocr or prepare_requested),
                                  ('--charts-budget', a.charts_budget, do_charts),
                                  ('--tables-budget', a.tables_budget, do_tables),
                                  ('--digest-budget', a.digest_budget, do_digest)):
         if value is not None and not enabled:
             ap.error(f'{flag} requires its preparation stage')
-    if a.bank_review and a.engine != 'loop':
-        ap.error('--bank-review requires --engine loop')
-    if a.bank_budget is not None and (not a.bank_review or a.bank_budget < 0):
-        ap.error('--bank-budget requires --bank-review and must be non-negative')
-    if a.ocr and not prepare_requested:
-        from stage5_insight_detection.bank_analytics.library import BankLibrary
-        from stage5_insight_detection.bank_analytics.ocr import AnalyticsOCR
-        BankLibrary.refresh(ocr=AnalyticsOCR(**({'budget': a.ocr_budget} if a.ocr_budget is not None else {})), rebuild=True)
     source_news = news_pool()
     with news_snapshot(source_news):
         usage = UsageMetadataCallbackHandler()
         models = ChatModels(callbacks=[usage])
         preparation = None
         prepared_bank = None
-        if prepare_requested:
+        if prepare_requested or a.ocr:
             from stage5_insight_detection.bank_analytics.prepare import PreparationOptions
-            preparation = PreparationOptions(charts=do_charts, tables=do_tables, digests=do_digest,
+            preparation = PreparationOptions(ocr=True, charts=do_charts, tables=do_tables, digests=do_digest, chart_mode=a.chart_mode,
                 ocr_budget=15 if a.ocr_budget is None else a.ocr_budget,
                 charts_budget=8 if a.charts_budget is None else a.charts_budget,
                 tables_budget=7 if a.tables_budget is None else a.tables_budget,
@@ -490,19 +543,18 @@ if __name__ == '__main__':
             # Publish prepared fragments before the parallel agents open their search/library snapshots.
             from stage5_insight_detection.bank_analytics.prepare import prepare_bank
             prepared_bank = prepare_bank(preparation, models)
-        bank = optional_bank() if a.source != 'news' or a.engine == 'judge' else None
+        bank = optional_bank()
+        def save_run(rows):
+            if prepared_bank is not None:
+                for row in rows:
+                    row['bank_preparation'] = prepared_bank.report
+            return _save_results(a.company_id, a.role, source_news, rows, a.user_id)
         if a.source == 'analytics':
             run, error = contextvars.copy_context().run(lambda: run_analytics(
                 a.company_id, a.role, models, cache_only=a.analytics_cache_only, refresh=a.analytics_refresh,
                 strict=a.analytics_strict_cache, bank=bank))
             results = analytics_rows(run, error, [], a.analytics_share, a.analytics_cache_only)
-            out = _save_results(a.company_id, a.role, source_news, results)
-        elif a.engine == 'loop':
-            results = run_loop(a.company_id, a.role, models, a.candidates, a.judge, retrieval=a.retrieval,
-                               bank_review=a.bank_review, bank_budget=a.bank_budget, preparation=preparation,
-                               prepared_bank=prepared_bank, workers=a.workers)
-            results = [migrate_result(r, a.company_id) for r in results]  # contract v2 (a superset of the old one)
-            out = _save_results(a.company_id, a.role, source_news, results)
+            out = save_run(results)
         else:  # judge engine: the whole E2E is one LangGraph graph, the analytics branch runs in parallel with the news
             def _run_analytics():
                 return contextvars.copy_context().run(lambda: run_analytics(
@@ -516,9 +568,10 @@ if __name__ == '__main__':
                 analytics_rows_fn=lambda run, error, rows: analytics_rows(run, error, rows, a.analytics_share,
                                                                          a.analytics_cache_only),
                 migrate_fn=lambda r: migrate_result(r, a.company_id),
-                save_fn=lambda rows: _save_results(a.company_id, a.role, source_news, rows))
+                save_fn=save_run)
             state = graph.invoke({'company_id': a.company_id, 'role': a.role, 'n_candidates': a.candidates,
-                                  'n_judge': a.judge, 'retrieval': a.retrieval, 'workers': a.workers},
+                                  'n_judge': a.judge, 'retrieval': a.retrieval, 'workers': a.workers,
+                                  'personalization': personalization.model_dump() if personalization is not None else None},
                                  config={'max_concurrency': max(1, a.workers)})
             results, out = state['results'], state['out']
         print(f'{out}: {sum("insight" in r for r in results)} insights, '

@@ -135,7 +135,8 @@ class Catalog:
         for filename,key in sorted(selected.items()):
             if key not in self.loaded:
                 manifest=json.loads((self.root/'reports'/key/'ready.json').read_text(encoding='utf-8'))
-                options=PreparationOptions(**manifest['options'])
+                # Historical recipes without a mode used all; do not reinterpret them via today's environment.
+                options=PreparationOptions(**({'chart_mode':'all'} | manifest['options']))
                 with self.lock:
                     lock=self.report_locks.setdefault(key,threading.Lock())
                 with lock:

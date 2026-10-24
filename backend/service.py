@@ -3,7 +3,6 @@
 The judge engine goes through the LangGraph E2E (pipeline.build_e2e_graph): the news engine and the
 bank-analytics branch run in parallel in one code path with the CLI, and a SqliteSaver checkpointer
 (thread_id = run id) lets a job resume after a crash instead of starting over."""
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from uuid import uuid4
 
@@ -11,11 +10,12 @@ from common.data import DATA
 from common.llm import ChatModels
 from common.news_corpus import save_results
 from common.news_snapshot import news_snapshot
+from common.personalization import load_personalization
 from common.search import news_pool, corpus_fingerprint
 from backend.catalog import Catalog
 from backend.jobs import Jobs
 from stage5_insight_detection.bank_analytics.ocr import PDF_DIR
-from stage5_insight_detection.bank_analytics.prepare import PreparationOptions, PreparedBank
+from stage5_insight_detection.bank_analytics.prepare import PreparationOptions
 
 class Service:
     def __init__(self,root=None,models_factory=ChatModels,processor=None,agent_workers=4,pdf_workers=2,
@@ -54,12 +54,13 @@ class Service:
 
     def run(self,r):
         import pipeline
+        personalization = load_personalization(r.user_id, r.company_id, r.role) if r.user_id else None
         models=self.models_factory()
         run_dir=self.root/'results'/uuid4().hex
         prep=r.bank_prepare or r.bank_charts or r.bank_tables or r.bank_digest
         if prep or r.ocr:
             options=PreparationOptions(ocr=r.ocr or prep,charts=r.bank_prepare or r.bank_charts,tables=r.bank_prepare or r.bank_tables,
-                digests=r.bank_prepare or r.bank_digest,
+                digests=r.bank_prepare or r.bank_digest,chart_mode=r.chart_mode,
                 ocr_budget=15 if r.ocr_budget is None else r.ocr_budget,
                 charts_budget=8 if r.charts_budget is None else r.charts_budget,
                 tables_budget=7 if r.tables_budget is None else r.tables_budget,
@@ -68,7 +69,8 @@ class Service:
             for id in ids:
                 job=self.pdfs.wait(id)
                 if job['status']!='succeeded': raise RuntimeError(job['error'])
-        version,library,bank=self.catalog.snapshot(models)
+        # Preparation finishes before pinning the search view used by both judge and analytics.
+        version,_,bank=self.catalog.snapshot(models)
         components={'news':{'status':'skipped'},'analytics':{'status':'skipped'}}
         errors=[]
         with news_snapshot():
@@ -76,7 +78,6 @@ class Service:
             if news is not None:
                 from common.news_corpus import archive_corpus
                 archive_corpus(news,DATA/'news')
-            prepared=PreparedBank(library,dict(status='complete',version=version,reports=len(bank.parts)))
 
             def analytics_run_task():
                 # Snapshot-specific cache avoids serving an analysis from a different set of reports.
@@ -101,22 +102,6 @@ class Service:
                 else:
                     components['analytics']={'status':'succeeded'}
 
-            def loop_engine():
-                results=pipeline.run_loop(r.company_id,r.role,models,r.candidates,r.judge,retrieval=r.retrieval,
-                    bank_review=r.bank_review,bank_budget=r.bank_budget,prepared_bank=prepared,
-                    workers=r.workers,cards_dir=run_dir/'cards')
-                if r.source!='news':  # loop + analytics join sequentially (the loop owns its own pool)
-                    import contextvars
-                    with ThreadPoolExecutor(1) as executor:
-                        future=executor.submit(contextvars.copy_context().run,analytics_run_task)
-                        results=[pipeline.migrate_result(row,r.company_id) for row in results]
-                        run,error=future.result()
-                        note_analytics(run,error)
-                        if run is not None:
-                            results+=pipeline.analytics_rows(run,'',results,r.analytics_share,r.analytics_cache_only)
-                        return results
-                return results
-
             def judge_engine():
                 graph=pipeline.build_e2e_graph(
                     pipeline.InsightPipeline(models.cheap(),models.agent(),bank=bank),
@@ -130,7 +115,8 @@ class Service:
                                          str(run_dir/'results.json'))[1],
                     checkpointer=self.checkpointer)
                 state=graph.invoke({'company_id':r.company_id,'role':r.role,'n_candidates':r.candidates,
-                    'n_judge':r.judge,'retrieval':r.retrieval,'workers':r.workers},
+                    'n_judge':r.judge,'retrieval':r.retrieval,'workers':r.workers,
+                    'personalization':personalization.model_dump() if personalization is not None else None},
                     config={'max_concurrency':max(1,r.workers),'configurable':{'thread_id':run_dir.name}})
                 if r.source=='both':
                     note_analytics(state.get('analytics'),state.get('analytics_error',''))
@@ -141,16 +127,12 @@ class Service:
                 note_analytics(run,error)
                 results=pipeline.analytics_rows(run,'',[],r.analytics_share,r.analytics_cache_only) if run is not None else []
             else:
-                results=(loop_engine() if r.engine=='loop' else judge_engine())
+                results=judge_engine()
                 components['news']={'status':'succeeded'}
-                if r.engine=='loop' and r.source!='news':
-                    pass  # analytics already joined inside loop_engine
-            if r.engine=='loop' and r.source=='news':
-                results=[pipeline.migrate_result(row,r.company_id) for row in results]
             if news is not None and (run_dir/'results.json').exists() is False:
                 save_results(run_dir/'results.json',results,news,DATA/'news')
             return dict(status='partial' if errors else 'succeeded',components=components,errors=errors,
-                        company_id=r.company_id,role=r.role,bank_version=version,
+                        company_id=r.company_id,role=r.role,user_id=r.user_id,bank_version=version,
                         corpus_fingerprint=corpus_fingerprint(news) if news is not None else None,results=results)
 
     def ask(self, company_id: str, role: str, question: str, insight_title: str | None = None):

@@ -21,13 +21,8 @@ PREFIX = {'ai-forever/FRIDA': ('search_query: ', 'search_document: '),
 
 @lru_cache(None)
 def _model(name: str = MODEL):
-    from sentence_transformers import SentenceTransformer  # heavy import only when dense search is used
-    import torch
-    m = SentenceTransformer(name, device='cuda' if torch.cuda.is_available() else 'cpu')
-    if m.device.type == 'cuda':
-        m.half()
-    m.max_seq_length = 512
-    return m
+    from common.encoders import load_encoder
+    return load_encoder(name)
 
 
 def encode(texts: list[str], kind: str = 'query', name: str = MODEL, batch_size: int = 16) -> np.ndarray:

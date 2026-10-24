@@ -15,6 +15,18 @@ def role(key: str) -> dict:
     return roles()[key]
 
 
+def canonical_role(value: str) -> str:
+    """Recognize stored display names from older model outputs; leave unknown roles unchanged."""
+    if not isinstance(value, str):
+        return value  # The receiving schema handles invalid types.
+    normalized = value.strip().casefold()
+    for key, spec in roles().items():
+        title = spec['title'].casefold()
+        if normalized in (key.casefold(), title, f'{title} ({key.casefold()})'):
+            return key
+    return value
+
+
 def role_channels(key: str | None) -> list[str]:
     """Macro channel keys the role cares about; no role -> none."""
     return role(key)['channels'] if key else []

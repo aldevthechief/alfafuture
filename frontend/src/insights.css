@@ -50,3 +50,10 @@
 
 /* backend status line under the page subtitle */
 .ip-live{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:-4px 0 16px}
+.discussion .qa{padding:12px 0;border-bottom:1px solid var(--fill)}
+.discussion .qa p{white-space:pre-wrap;overflow-wrap:anywhere}
+.discussion-error{color:#b51f16}
+.discussion-saved{font-size:13px;color:var(--text-2)}
+.qa-sources{font-size:13px;color:var(--text-2)}
+.qa-sources summary{cursor:pointer}
+.qa-sources ul{margin-top:8px;max-height:260px;overflow:auto}

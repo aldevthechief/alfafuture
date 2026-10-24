@@ -36,14 +36,9 @@ def _encoder(slug: str):
 
 @lru_cache(None)
 def _cached_encoder(slug: str):
-    import torch
-    from sentence_transformers import SentenceTransformer
+    from common.encoders import load_encoder
     name, _, pad = MODELS[slug]
-    cuda = torch.cuda.is_available()
-    m = SentenceTransformer(name, device='cuda' if cuda else 'cpu', model_kwargs={'torch_dtype': torch.float16} if cuda else None,
-                            tokenizer_kwargs={'padding_side': pad} if pad else None)
-    m.max_seq_length = 512
-    return m
+    return load_encoder(name, tokenizer_kwargs={'padding_side':pad} if pad else None)
 
 
 def encode(slug: str, texts: list[str], batch_size: int = 16) -> np.ndarray:

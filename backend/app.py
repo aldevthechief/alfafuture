@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Annotated
 
 import pymupdf
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
@@ -39,7 +39,16 @@ def create_app(service=None, cors_origins=None):
     origins=cors_origins if cors_origins is not None else [origin.strip() for origin in os.environ.get(
         'API_CORS_ORIGINS','http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000,http://127.0.0.1:3000').split(',') if origin.strip()]
     app.add_middleware(CORSMiddleware,allow_origins=origins,allow_credentials=True,
-                       allow_methods=['GET','POST','OPTIONS'],allow_headers=['Content-Type','Authorization'])
+                       allow_methods=['GET','POST','OPTIONS'],allow_headers=['Content-Type','Authorization','X-User-ID'])
+
+    User = Annotated[str | None, Header(min_length=1, max_length=100, pattern=r'^[\w.@-]+$')]
+
+    def with_user(request, user_id):
+        if user_id is None:
+            return request
+        if request.user_id is not None and request.user_id != user_id:
+            raise HTTPException(422, 'user_id and X-User-ID must match')
+        return request.model_copy(update={'user_id':user_id})
 
     def svc(): return app.state.service
     def submit(work):
@@ -58,30 +67,39 @@ def create_app(service=None, cors_origins=None):
     def health(): return {'status':'ok'}
 
     @app.get('/v1/options',tags=['system'])
-    def options(): return dict(roles=roles(),engines=['judge','loop'],retrieval=['v2','v3','hybrid','lexical'],sources=['news','analytics','both'])
+    def options(): return dict(roles=roles(),engines=['judge'],retrieval=['v2','v3','hybrid','lexical'],sources=['news','analytics','both'],
+                              chart_modes=['all','selective','off'])
 
     @app.post('/v1/analyses',status_code=202,response_model=JobResponse,tags=['agents'],summary='Run one company/role analysis with all CLI flags')
-    def analyze(request: AnalysisRequest): return submit(lambda:svc().analyze(request))
+    def analyze(request: AnalysisRequest, x_user_id: User = None):
+        request = with_user(request, x_user_id)
+        return submit(lambda:svc().analyze(request))
 
     @app.post('/v1/analyses/batch',status_code=202,tags=['agents'],summary='Queue independent companies/roles/scenarios in parallel')
-    def batch(request: BatchRequest):
+    def batch(request: BatchRequest, x_user_id: User = None):
         # Every item has its own durable status; a queue limit returns accepted jobs explicitly.
         jobs=[]
-        for item in request.items:
+        items = [with_user(item, x_user_id) for item in request.items]
+        for item in items:
             try: jobs.append(svc().analyze(item))
             except QueueFull: return dict(jobs=jobs,remaining=len(request.items)-len(jobs),queue_full=True)
         return dict(jobs=jobs,remaining=0)
 
     @app.get('/v1/jobs/{job_id}',response_model=JobResponse,tags=['jobs'],summary='Status, result or error of an analysis/PDF job')
-    def job(job_id: str):
+    def job(job_id: str, x_user_id: User = None):
         for queue in (svc().agents,svc().pdfs):
-            try: return queue.get(job_id)
+            try:
+                result = queue.get(job_id)
+                if result['request'].get('user_id') not in (None, x_user_id):
+                    raise HTTPException(404,'Unknown job')
+                return result
             except KeyError: pass
         raise HTTPException(404,'Unknown job')
 
     @app.get('/v1/jobs',tags=['jobs'])
-    def jobs():
-        return dict(analyses=[svc().agents.get(i) for i in list(svc().agents.items)],
+    def jobs(x_user_id: User = None):
+        analyses = [svc().agents.get(i) for i in list(svc().agents.items)]
+        return dict(analyses=[job for job in analyses if job['request'].get('user_id') in (None, x_user_id)],
                     reports=[svc().pdfs.get(i) for i in list(svc().pdfs.items)])
 
     @app.get('/v1/reports',tags=['reports'],summary='Atomically published report versions')

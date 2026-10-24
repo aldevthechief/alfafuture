@@ -12,13 +12,28 @@
 e5-инструменты ретривера v2 (векторы Kaggle), генератор тезисов удалён — агент аналитики единственный
 bank-origin источник. Все LLM-вызовы через LangChain (кэш + Langfuse), промпты в `prompts/*.md`.
 
-**Docker (фронт + бек + редис):** `docker compose up --build` → фронт http://localhost:5173
-(nginx проксирует `/v1/` на бекенд, стрим ответов без буферизации), API/Swagger http://localhost:8000/docs,
+**Docker (фронт + бек + диалог + редис):** `docker compose up -d --build` → фронт http://localhost:5173
+(nginx проксирует `/v1/` на бекенд, `/feedback/` на сервис диалога), API/Swagger http://localhost:18000/docs,
 Redis с persistent volume. Тёплый старт: в репо лежит `data/llm_cache/llm.jsonl.gz` (актуальные ответы
 LLM-вызовов, 74→5,7 МБ); прогрев Redis — `docker compose run --rm pipeline python -X utf8 scripts_seed_redis.py`
-(сидит и из `.gz`); после этого кэшированные прогоны не тратят квоту. Вопрос по инсайту во фронте
-(«Вопрос по событию») стримится токен за токеном: `POST /v1/insights/ask` → ответ модели по сохранённым
-материалам, Spinner из core-components, пока модель думает.
+(сидит и из `.gz`); после этого кэшированные прогоны не тратят квоту. Вопросы, реакции и история
+работают через `feedback_api`: ответ приходит целиком с источниками, пока модель думает виден Spinner.
+История хранится в SQLite; при `ALFA_CACHE_REDIS_URL` проверенные ответы диалога кешируются в Redis
+на час (`FEEDBACK_LLM_CACHE_TTL`, `0` отключает). Кеш учитывает пользователя и контекст, актуальность поисков
+перепроверяется без LLM. Повтор того же `request_id` всегда возвращает сохранённый в SQLite ответ.
+
+Одна команда поднимает `redis`, `backend`, `feedback-api`, `frontend`. Статусы — `docker compose ps`,
+логи — `docker compose logs -f --tail=100`, остановка — `docker compose down` (том Redis сохраняется).
+API диалога — http://localhost:18001/docs. Внешние порты API задаются через `BACKEND_PORT` и `FEEDBACK_PORT`
+(по умолчанию 18000/18001, чтобы обходить резервирование Windows/Hyper-V портов около 8000).
+Вспомогательный `pipeline` вынесен в профиль `tools` и используется для разовых CLI-команд:
+`docker compose run --rm pipeline python -X utf8 pipeline.py --help`.
+При явном `compose run pipeline` Compose сам активирует профиль этого сервиса.
+Сборка API использует `torch==2.6.0+cpu`, таймаут pip 120 секунд и 10 повторов сетевых запросов.
+Загрузки pip сохраняются в кеше BuildKit между попытками; PyTorch устанавливается отдельным слоем.
+Веса Hugging Face сохраняются в общем томе `huggingface-cache` между пересозданиями контейнеров.
+Локальные энкодеры загружаются последовательно и переиспользуются внутри процесса: параллельная
+подготовка PDF и поиск новостей не создают несколько экземпляров E5 и не пересекают инициализацию meta-тензоров.
 
 **Тесты:** `python -m pytest tests` — всё офлайн (174+): `tests/unit/<модуль>/…` — модульные,
 `tests/integration/…` — сквозные (scripted-модели, реальный пул новостей), смоук-скрипты гоняются
@@ -26,7 +41,7 @@ LLM-вызовов, 74→5,7 МБ); прогрев Redis — `docker compose run
 Каждый этап — своя папка, каждый подход — подпапка этапа, golden set этапа — в `golden_set/` этого этапа.
 Промпты лежат отдельными `.md` файлами в `prompts/` рядом с кодом, который их использует.
 
-**Для команды:** [reference текущей MVP-интеграции и обзор PR](docs/MVP_REFERENCE.md) — два режима пайплайна,
+**Для команды:** [reference текущей MVP-интеграции и обзор PR](docs/MVP_REFERENCE.md) — контракты пайплайна,
 контракты данных, статусы выдачи, подготовка OCR, диагностика и ограничения. Начинать интеграцию новых модулей с него.
 
 | Этап команды | Папка | Подходы | Golden set |
@@ -46,16 +61,21 @@ LLM-вызовов, 74→5,7 МБ); прогрев Redis — `docker compose run
 однострочный блок «Инсайты» под строкой статусов на главной (топ-1 + «Больше инсайтов»), пункт «Инсайты» в «Мои сервисы»,
 страница ленты (фильтры), профиль компании с HITL-вопросами «Верно ли, что …?» (да / нет /
 другое / пропустить, по гипотезам агента этапа 2, которые данные не подтвердили), панель инсайта (факты / вывод AI /
-гипотезы / позиция Банка раздельно, источники, действия, отзыв с причиной, вопрос по событию с потоковым ответом ассистента
-(`POST /v1/insights/ask`, Spinner пока модель отвечает), «как мы пришли к выводу»),
+гипотезы / позиция Банка раздельно, источники, действия, отзыв с причиной, вопрос по событию
+и история обсуждения из `feedback_api`, «как мы пришли к выводу»),
 переключатель компании группы и роли в шапке. Инсайты берутся из API бэкенда ([`frontend/src/api.js`](frontend/src/api.js),
 [docs/API.md](docs/API.md)): последний готовый анализ компании и роли из `GET /v1/jobs`, кнопка «Запустить анализ» —
 `POST /v1/analyses` и опрос `GET /v1/jobs/{id}`, факты компании для источников — `GET /v1/companies/{id}`.
 Пока анализа нет или API недоступен, показывается синтетика `frontend/public/feed.json` (из неё же роли и профиль с гипотезами).
-Отзывы и ответы пока пишутся в консоль браузера. Только десктоп.
-Вместе: `python -m uvicorn backend.app:app --host 127.0.0.1 --port 8000`, затем `cd frontend && npm ci && npm run dev` →
+Готовая карточка регистрируется для обсуждения один раз на пользователя и задание; повторное открытие сохраняет историю.
+Роль передаётся как `cfo`, отображаемое название — отдельно. Демо-карточки обсуждать нельзя.
+Ответы на гипотезы профиля пока пишутся в консоль браузера. Только десктоп.
+В отдельных терминалах: `python -m uvicorn backend.app:app --host 127.0.0.1 --port 8000`,
+`python -m uvicorn feedback_api.app:app --host 127.0.0.1 --port 8001`, затем `cd frontend && npm ci && npm run dev` →
 http://localhost:5173; `npm run build` → статический `dist/`. Адрес API — `VITE_API_URL` (по умолчанию `http://127.0.0.1:8000`,
-`off` — только синтетика), доп. поля запроса анализа — `VITE_ANALYSIS`, например `'{"engine":"loop","analytics_cache_only":true}'`.
+`off` — только синтетика), диалога — `VITE_FEEDBACK_API` (по умолчанию `http://127.0.0.1:8001`, `off` отключает).
+Общий пользователь анализа и обсуждений — `VITE_USER_ID` (по умолчанию `demo-user`). Переменные Vite задаются до сборки.
+Доп. поля запроса анализа — `VITE_ANALYSIS`, например `'{"engine":"judge","analytics_cache_only":true}'`.
 
 ## Общий код — `common/`
 | Модуль | Что |
@@ -103,14 +123,14 @@ LLM_API_KEY=your_team_key
 
 Это ключ LLM-прокси организаторов. Ключи Langfuse необязательны и не заменяют `LLM_API_KEY`.
 
-Для первого запуска через аналитический цикл, без скачивания локального энкодера:
+Для первого запуска judge с лексическим поиском:
 
 ```powershell
-.\.venv\Scripts\python.exe -X utf8 pipeline.py U_68622 --role ceo --candidates 8 --judge 1 --engine loop --retrieval lexical
+.\.venv\Scripts\python.exe -X utf8 pipeline.py U_68622 --role ceo --candidates 8 --judge 1 --engine judge --retrieval lexical
 ```
 
 `--judge 1` задаёт максимум новостей для глубокого разбора, а не обещает один готовый инсайт.
-JSON результата: `data/insights/U_68622_ceo.json`; HTML-карточки режима `loop`: `data/insights/cards/`.
+JSON результата: `data/insights/U_68622_ceo.json`.
 Повторный запуск для той же компании и роли заменяет JSON; для сравнения запусков сохраните его копию.
 Если окружение уже активировано, вместо `.\.venv\Scripts\python.exe` можно использовать `python`:
 
@@ -119,10 +139,10 @@ pip install -r requirements.txt
 python -m pytest tests                              # весь набор офлайн: unit + integration + смоук-скрипты
 python -X utf8 tests/integration/test_pipeline.py   # офлайн-смоук пайплайна (scripted-модели), без ключа
 python -X utf8 pipeline.py U_68622 --role cfo        # нужен LLM_API_KEY
-python -X utf8 pipeline.py U_68622 --role cfo --engine loop       # этапы 4–6 через агентный цикл аналитики Банка
+python -X utf8 pipeline.py U_68622 --role cfo --source news --user-id demo-user # учитывать реакции из feedback_api
 python -X utf8 pipeline.py U_68622 --role cfo --retrieval lexical # прежний поиск по граням
 ```
-В обоих режимах (`judge` и `loop`) по умолчанию используется ретривер v2 ([`stage3_news_search/retrieval_v2/`](stage3_news_search/retrieval_v2/README.md)):
+В judge по умолчанию используется ретривер v2 ([`stage3_news_search/retrieval_v2/`](stage3_news_search/retrieval_v2/README.md)):
 стандартные генераторы + фабрика генераторов (GLM, ~4 ₽ один раз на компанию, затем кеш) на поиске e5 + qwen + BM25.
 Векторы новостей кешируются по хешу текста; без кеша первый запуск кодирует весь пул (см. README ретривера).
 `--retrieval hybrid` — прежний гибридный поиск событий поверх того же e5-энкодера (FRIDA удалена:
@@ -195,25 +215,32 @@ python -m common.ocr_local --download
 
 ```powershell
 # Явно подготовить OCR и пересобрать библиотеку перед общим запуском.
-python -X utf8 pipeline.py U_68622 --role cfo --engine loop --retrieval lexical --ocr
+python -X utf8 pipeline.py U_68622 --role cfo --engine judge --retrieval lexical --ocr
 
 # Весь процесс вместе: полный OCR → графики → таблицы → выжимки → агентский цикл.
-python -X utf8 pipeline.py U_68622 --role ceo --candidates 8 --judge 1 --engine loop --retrieval lexical --bank-prepare
+python -X utf8 pipeline.py U_68622 --role ceo --candidates 8 --judge 1 --engine judge --retrieval lexical --bank-prepare
 
 # Выбрать только сверку графиков и таблиц; необходимый OCR включится автоматически.
-python -X utf8 pipeline.py U_68622 --role ceo --engine loop --retrieval lexical --bank-charts --bank-tables
+python -X utf8 pipeline.py U_68622 --role ceo --engine judge --retrieval lexical --bank-charts --bank-tables
 
-# Дополнительно подключить LLM-reviewer банковских фрагментов с бюджетом на этот запуск.
-python -X utf8 pipeline.py U_68622 --role cfo --engine loop --retrieval lexical --bank-review --bank-budget 1.5
+# Обрабатывать графики, добавляющие информацию к тексту отчёта.
+python -X utf8 pipeline.py U_68622 --role ceo --engine judge --retrieval lexical --bank-charts --chart-mode selective
+
 ```
 
 Подготовка выключена по умолчанию. `--bank-charts`, `--bank-tables`, `--bank-digest` выбирают отдельные этапы;
-`--bank-prepare` включает их все и полный OCR. Эти флаги требуют `--engine loop`. Результаты сразу передаются циклу,
+`--bank-prepare` включает их все и полный OCR. Подготовка завершается до запуска judge; готовые материалы попадают в его поиск,
 кеши сохраняются между запусками. Подготовка общая для всех новостей запуска; `--candidates` не ограничивает число PDF.
+`--chart-mode all|selective|off` задаёт отбор графиков при подготовке: все, только добавляющие информацию к тексту,
+либо без графиков. По умолчанию берётся `BANK_CHARTS`, затем `all`; явный флаг важнее окружения.
+Один режим используется для чтения графиков, библиотеки и текстовых выжимок. В API поле называется `chart_mode`
+и входит в ключ версии кеша подготовленного PDF.
 Бюджеты на запуск: `--ocr-budget` (15 ₽), `--charts-budget` (8 ₽), `--tables-budget` (7 ₽), `--digest-budget` (3 ₽).
 Они относятся к подготовке, генерация инсайтов оплачивается отдельно. При исчерпании бюджета используется успевшая
 подготовиться аналитика, в `data/analytics/preparation.json`, журнале и поле результата `bank_preparation` виден статус `partial`.
-`--ocr` сохраняет прежнее поведение простого OCR; reviewer включается отдельно через `--bank-review`.
+`--ocr` использует тот же этап полной подготовки OCR и пересборки библиотеки перед judge.
+Выбор `loop` и его параметры `--bank-review`/`--bank-budget` убраны из CLI/API.
+Реализация `run_loop()`, `AnalystLoop`, reviewer и все их модули сохранены; общие расчёты и аудит продолжает использовать judge.
 Подробности — в [reference](docs/MVP_REFERENCE.md#аналитика-банка-и-ocr).
 
 **Данные**:
@@ -247,7 +274,7 @@ HTML-карточка показывает цитаты рядом с факта
 
 ```powershell
 .\.venv\Scripts\python.exe -X utf8 pipeline.py U_68622 --role cfo --engine judge --retrieval lexical
-.\.venv\Scripts\python.exe -X utf8 pipeline.py U_68622 --role cfo --engine loop --retrieval hybrid
+.\.venv\Scripts\python.exe -X utf8 pipeline.py U_68622 --role cfo --engine judge --retrieval hybrid
 .\.venv\Scripts\python.exe -X utf8 -m unittest test_news_updates test_merge_regressions test_news_corpus test_pipeline_failures
 ```
 

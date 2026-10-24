@@ -151,16 +151,17 @@ class InsightWriter:
         """Returns the final insight and the review of the last draft that was checked."""
         inputs = {'company_id': company_id, 'role': role, **role_context(role), 'decision': decision, 'evidence': evidence.render(),
                   'rules': RULES}
-        insight = self.writer.invoke(inputs | {'feedback': 'нет'})
+        # Identity is supplied by the caller, never by a generated display name (including cached answers).
+        insight = self.writer.invoke(inputs | {'feedback': 'нет'}).model_copy(update={'role': role})
         if found := self._remind(insight, 0, evidence):  # one look-again pass before the (expensive) checker
-            insight = self.writer.invoke(inputs | {'feedback': reminder_note(found)})
+            insight = self.writer.invoke(inputs | {'feedback': reminder_note(found)}).model_copy(update={'role': role})
         review = self._check(insight, inputs, evidence)
         for n in range(1, self.revisions + 1):  # every rewrite gets the checker's issues in full, plus code reminders
             if review.ok:
                 break
             found = self._remind(insight, n, evidence)
             feedback = '\n'.join(f'- {i}' for i in review.issues) + (f'\n\n{reminder_note(found)}' if found else '')
-            insight = self.writer.invoke(inputs | {'feedback': feedback})
+            insight = self.writer.invoke(inputs | {'feedback': feedback}).model_copy(update={'role': role})
             review = self._check(insight, inputs, evidence)
         return insight, review
 

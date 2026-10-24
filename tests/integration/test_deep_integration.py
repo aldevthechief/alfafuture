@@ -9,6 +9,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 import pandas as pd
+import numpy as np
 import pymupdf
 from langchain_core.messages import AIMessage
 from langchain_core.outputs import ChatGeneration
@@ -100,7 +101,13 @@ class PdfIntegrationTests(unittest.TestCase):
             (root/'tables/synthetic_p1.json').write_text(json.dumps(table_record(), ensure_ascii=False), encoding='utf-8')
             prepared = best_pages(report, root/'ocr_full', root/'ocr')
             self.assertIn('таблица сверена', prepared[0])
-            bank = BankAnalytics(root/'ocr', reports=[])
+            # This boundary checks prepared table text, not model embeddings. Keep the test offline.
+            search = 'stage5_insight_detection.bank_analytics.search'
+            tokenizer = SimpleNamespace(encode=lambda text, **kw:text.split())
+            with patch(search+'.encoder',return_value=SimpleNamespace(tokenizer=tokenizer)), \
+                 patch(search+'.embed',side_effect=lambda texts,folder:np.ones((len(texts),2))), \
+                 patch(search+'.bm25_index',return_value=lambda query:[]):
+                bank = BankAnalytics(root/'ocr', reports=[])
             self.assertTrue(any('таблица сверена' in c['text'] for c in bank.chunks))
             self.assertTrue(all(c['id'].startswith('bank:synthetic:p1.') for c in bank.chunks))
 

@@ -8,6 +8,7 @@ from pathlib import Path
 from common.llm import ChatModels, StructuredOutputError
 from common.news_corpus import write_json
 from common.trace import AgentTrace
+from stage5_insight_detection.bank_analytics.chart_novelty import mode_of
 from stage5_insight_detection.bank_analytics.charts import read_pages as read_charts
 from stage5_insight_detection.bank_analytics.digest import (
     BudgetExceeded, CostMeter, PROMPTS, ReportDigest, ReportDigester, digest_file,
@@ -28,8 +29,11 @@ class PreparationOptions:
     charts_budget: float = 8.0
     tables_budget: float = 7.0
     digest_budget: float = 3.0
+    chart_mode: str | None = None
 
     def __post_init__(self):
+        # Freeze the environment fallback in the recipe, so queued jobs and cache keys keep the same mode.
+        object.__setattr__(self, 'chart_mode', mode_of(self.chart_mode))
         for name in ('ocr_budget', 'charts_budget', 'tables_budget', 'digest_budget'):
             value = getattr(self, name)
             if not math.isfinite(value) or value < 0:
@@ -62,7 +66,8 @@ def prepare_bank(options: PreparationOptions, models: ChatModels, *, pdf_dir: Pa
 
     def refresh():
         return BankLibrary.refresh(pdf_dir=pdf_dir, ocr_dir=pdf_dir / 'ocr', full_dir=pdf_dir / 'ocr_full',
-                                   out=pdf_dir / 'fragments.jsonl', registry=pdf_dir / 'registry.json')
+                                   out=pdf_dir / 'fragments.jsonl', registry=pdf_dir / 'registry.json',
+                                   charts=options.chart_mode)
 
     if not options.enabled:
         return PreparedBank(refresh(), dict(report, status='disabled'))
@@ -74,7 +79,7 @@ def prepare_bank(options: PreparationOptions, models: ChatModels, *, pdf_dir: Pa
         write_json(pdf_dir / 'preparation.json', report)
         trace.log('bank_preparation', **report)
         return PreparedBank(library, report)
-    if options.charts or options.tables:
+    if (options.charts and options.chart_mode != 'off') or options.tables:
         check_local_ocr()
     callbacks = list(getattr(models, 'callbacks', None) or [])
 
@@ -118,7 +123,8 @@ def prepare_bank(options: PreparationOptions, models: ChatModels, *, pdf_dir: Pa
         pages = sorted(all_pages, key=lambda pg: pg not in likely_charts)
         stage('charts', options.charts_budget,
               lambda: read_charts(pages, pdf_dir=pdf_dir, out_dir=pdf_dir / 'charts',
-                                  budget=options.charts_budget, callbacks=[*callbacks, meter]), lambda: meter.cost)
+                                  budget=options.charts_budget, callbacks=[*callbacks, meter],
+                                  charts=options.chart_mode), lambda: meter.cost)
     if options.tables:
         meter = CostMeter()
         pages = sorted(all_pages, key=lambda pg: pg not in likely_tables)
@@ -132,7 +138,7 @@ def prepare_bank(options: PreparationOptions, models: ChatModels, *, pdf_dir: Pa
     if options.digests:
         text_dir = pdf_dir / 'text'
         for pdf in pdfs:
-            export(pdf, pdf_dir / 'ocr_full', text_dir, pdf_dir / 'ocr')
+            export(pdf, pdf_dir / 'ocr_full', text_dir, pdf_dir / 'ocr', charts=options.chart_mode)
         recipe = hashlib.sha256((PROMPTS.text('digest') + PROMPTS.text('digest_merge') +
                                  json.dumps(ReportDigest.model_json_schema(), sort_keys=True) +
                                  str(getattr(getattr(models, 'settings', None), 'agent_model', 'provided-model'))).encode()).hexdigest()

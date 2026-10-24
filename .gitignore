@@ -268,3 +268,4 @@ data/retrieval_v2/
 /data/news/collector.sqlite3*
 
 /data/api/
+/data/feedback/

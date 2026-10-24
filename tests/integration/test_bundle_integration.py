@@ -37,39 +37,29 @@ class Related:
 
 class CliTests(unittest.TestCase):
     def test_actual_main_accepts_retrieval_ocr_and_saves_a_bound_empty_batch(self):
-        # Exercise argparse and the actual __main__, not just InsightPipeline.run().
-        for engine, bank_review in (('judge', False), ('loop', False), ('loop', True)):
-            with self.subTest(engine=engine, bank_review=bank_review), tempfile.TemporaryDirectory() as tmp:
+        from stage5_insight_detection.bank_analytics.prepare import PreparedBank
+        for engine_args in ([], ['--engine','judge']):
+            with self.subTest(engine_args=engine_args), tempfile.TemporaryDirectory() as tmp:
                 model = ScriptedChatModel(responses=[AIMessage(content='unused')])
-                factory = SimpleNamespace(cheap=lambda **kw: model, agent=lambda **kw: model)
-                args = ['pipeline.py', 'synthetic', '--engine', engine, '--source', 'news', '--retrieval', 'lexical', '--ocr']
-                if bank_review:
-                    args += ['--bank-review', '--bank-budget', '1.5']
-                with patch.object(sys, 'argv', args), patch('common.data.DATA', Path(tmp)), \
-                     patch('common.search.news_pool', return_value=NEWS), \
-                     patch('common.llm.ChatModels', return_value=factory), \
-                     patch('stage2_company_facts.deterministic_facts.facts.build', return_value={'synthetic': []}), \
-                     patch('stage3_news_search.retrieval.candidates', return_value=(NEWS.head(0), [])), \
-                     patch('stage5_insight_detection.news_enrichment.related_news.RelatedNews', Related), \
+                factory = SimpleNamespace(cheap=lambda **kw:model, agent=lambda **kw:model)
+                args = ['pipeline.py','synthetic',*engine_args,'--source','news','--retrieval','lexical','--ocr']
+                with patch.object(sys,'argv',args), patch('common.data.DATA',Path(tmp)), \
+                     patch('common.search.news_pool',return_value=NEWS), \
+                     patch('common.llm.ChatModels',return_value=factory), \
+                     patch('stage2_company_facts.deterministic_facts.facts.build',return_value={'synthetic':[]}), \
+                     patch('stage3_news_search.retrieval.candidates',return_value=(NEWS.head(0),[])), \
+                     patch('stage5_insight_detection.news_enrichment.related_news.RelatedNews',Related), \
                      patch('stage5_insight_detection.bank_analytics.search.BankAnalytics'), \
-                     patch('stage2_company_facts.profile.integration.load_profile', return_value=profile_snapshot()), \
-                     patch('common.trace.AgentTrace', return_value=AgentTrace(folder=None)), \
-                     patch('stage5_insight_detection.bank_analytics.ocr.AnalyticsOCR') as ocr, \
+                     patch('stage5_insight_detection.bank_analytics.prepare.prepare_bank',
+                           return_value=PreparedBank(BankLibrary([]),{'status':'complete'})) as prepare, \
                      patch('stage5_insight_detection.bank_analytics.review.BankReviewer') as reviewer, \
-                     patch.object(BankLibrary, 'refresh', return_value=BankLibrary([])) as refresh, \
-                     patch.object(BankLibrary, 'load', return_value=BankLibrary([])), \
-                     patch('stage5_insight_detection.bank_analytics.library.FRAGMENTS') as fragments, \
                      redirect_stdout(StringIO()):
-                    fragments.exists.return_value = True
-                    runpy.run_path('pipeline.py', run_name='__main__')
-                    refresh.assert_any_call(ocr=ocr.return_value, rebuild=True)
-                    self.assertEqual(refresh.call_count, 2 if engine == 'loop' else 1)
-                    if bank_review:
-                        reviewer.assert_called_once_with(budget=1.5)
-                    else:
-                        reviewer.assert_not_called()
-                self.assertEqual(json.loads((Path(tmp) / 'insights/synthetic_cfo.json').read_text()), [])
-                self.assertTrue(list((Path(tmp) / 'news/versions').glob('*/news.parquet')))
+                    runpy.run_path('pipeline.py',run_name='__main__')
+                    prepare.assert_called_once()
+                    self.assertTrue(prepare.call_args.args[0].ocr)
+                    reviewer.assert_not_called()
+                self.assertEqual(json.loads((Path(tmp)/'insights/synthetic_cfo.json').read_text()),[])
+                self.assertTrue(list((Path(tmp)/'news/versions').glob('*/news.parquet')))
 
 
 class OcrTests(unittest.TestCase):

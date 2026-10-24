@@ -1,8 +1,10 @@
 data/
 .git/
 .gitignore
-*.md
-!README.md
+# Agent prompts are runtime inputs; keep Markdown in the image.
 __pycache__/
 .pytest_cache/
 .venv/
+node_modules/
+**/node_modules/
+.cache/

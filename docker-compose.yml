@@ -5,6 +5,8 @@ services:
     volumes:
       - redis-data:/data
   pipeline:
+    # One-off CLI commands; the application stack starts without this service.
+    profiles: [tools]
     build: .
     environment:
       ALFA_CACHE_REDIS_URL: redis://redis:6379/0
@@ -12,6 +14,7 @@ services:
     volumes:
       - ./data:/app/data
       - ./common/llm/.env:/app/common/llm/.env:ro
+      - huggingface-cache:/root/.cache/huggingface
     depends_on:
       - redis
   backend:
@@ -21,10 +24,26 @@ services:
       ALFA_CACHE_REDIS_URL: redis://redis:6379/0
       CUDA_VISIBLE_DEVICES: "-1"
     ports:
-      - "8000:8000"
+      - "${BACKEND_PORT:-18000}:8000"
     volumes:
       - ./data:/app/data
       - ./common/llm/.env:/app/common/llm/.env:ro
+      - huggingface-cache:/root/.cache/huggingface
+    depends_on:
+      - redis
+  feedback-api:
+    build: .
+    command: python -m uvicorn feedback_api.app:app --host 0.0.0.0 --port 8001
+    environment:
+      ALFA_CACHE_REDIS_URL: redis://redis:6379/0
+      FEEDBACK_LLM_CACHE_TTL: "${FEEDBACK_LLM_CACHE_TTL:-3600}"
+      CUDA_VISIBLE_DEVICES: "-1"
+    ports:
+      - "127.0.0.1:${FEEDBACK_PORT:-18001}:8001"
+    volumes:
+      - ./data:/app/data
+      - ./common/llm/.env:/app/common/llm/.env:ro
+      - huggingface-cache:/root/.cache/huggingface
     depends_on:
       - redis
   frontend:
@@ -35,5 +54,7 @@ services:
       - "5173:80"
     depends_on:
       - backend
+      - feedback-api
 volumes:
   redis-data:
+  huggingface-cache:

@@ -10,23 +10,20 @@ import { Status } from '@alfalab/core-components/status';
 import { Tag } from '@alfalab/core-components/tag';
 import { Tabs, Tab } from '@alfalab/core-components/tabs';
 import { SidePanel } from '@alfalab/core-components/side-panel';
-import { Spinner } from '@alfalab/core-components/spinner';
 import { Typography } from '@alfalab/core-components/typography';
 import { Input } from '@alfalab/core-components/input';
-import { askInsight } from './api.js';
+import { InsightDiscussion } from './discussion.jsx';
 import { Plate } from '@alfalab/core-components/plate';
 import { API_ENABLED, companyFacts, latestJobs, startAnalysis, toFeed, waitJob } from './api';
 import './insights.css';
 
 const CONFIDENCE = { high: ['green', 'Уверенность высокая'], medium: ['orange', 'Уверенность средняя'], low: ['grey', 'Уверенность низкая'] };
-// feedback reason → pipeline stage it is routed to
-const REASONS = [['Не про нас', 'profile'], ['Уже знали', 'ranker'], ['Старая новость', 'news_search'], ['Ошибка в фактах', 'writer']];
 const TRACE = { plan: 'План', tool: 'Данные', check: 'Проверка' };
 const valid = s => s && !isNaN(new Date(s));
 const date = s => valid(s) ? new Date(s).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' }) : '';
 const time = s => valid(s) ? new Date(s).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) : '';
 const Title = props => <Typography.Title font="system" {...props} />;
-// shortcut: feedback and profile answers only go to the console until the pipeline has an endpoint for them
+// Profile answers still use the demo handler; insight feedback is persisted by feedback_api.
 const send = (kind, payload) => console.info(kind, payload);
 
 function useCtx() {
@@ -90,7 +87,7 @@ function App() {
   const role = data.roles.find(r => r.id === ctx.role)?.name;
   // API insights carry the role id
   const visible = (feed?.insights || []).filter(i => !hidden.includes(i.id))
-    .map(i => ({ ...i, role: data.roles.find(r => r.id === i.role)?.name || i.role }));
+    .map(i => ({ ...i, roleLabel: data.roles.find(r => r.id === i.role)?.name || i.role }));
   const hide = id => { setHidden(h => [...h, id]); setOpen(null); };
   const answer = (hid, a) => {
     send('profile_answer', { company: ctx.company, hypothesis: hid, ...a });
@@ -101,7 +98,8 @@ function App() {
   return <>
     {createPortal(<HomeWidget insights={visible} onOpen={setOpen} />, slot('insights-widget'))}
     {createPortal(<Page {...{ company, feed, role, live, run, visible, hidden, answers: answers[ctx.company] || {}, answer, onOpen: setOpen, onRestore: () => setHidden([]) }} />, slot('insights-page'))}
-    <InsightPanel insight={open} sources={sources} company={ctx?.company} onClose={() => setOpen(null)} onHide={hide} />
+    <InsightPanel key={`${ctx.company}:${ctx.role}:${open?.job_id || 'demo'}:${open?.id || 'closed'}`}
+      insight={open} sources={open?.sources || sources} company={ctx.company} onClose={() => setOpen(null)} onHide={hide} />
   </>;
 }
 
@@ -193,31 +191,12 @@ function SourceRefs({ ids, sources }) {
 }
 
 function InsightPanel({ insight: i, sources, onClose, onHide, company }) {
-  const [vote, setVote] = useState(null);
-  const [reason, setReason] = useState(null);
-  const [q, setQ] = useState('');
-  const [qa, setQa] = useState([]);
-  const [streaming, setStreaming] = useState(false);
   const [called, setCalled] = useState(false);
-  useEffect(() => { setVote(null); setReason(null); setQa([]); setCalled(false); }, [i?.id]);
   const used = i ? [...new Set([i.what_happened, i.why_it_matters, i.risks, i.opportunities, i.hypotheses, i.bank_view].flat().flatMap(c => c.sources))] : [];
-  // streamed answer over the saved insight rows (POST /v1/insights/ask); Spinner while the model reasons
-  const ask = () => {
-    if (!q.trim() || streaming) return;
-    const question = q;
-    setQ('');
-    setQa(a => [...a, [question, '']]);
-    setStreaming(true);
-    const append = text => setQa(a => { const c = [...a]; c[c.length - 1][1] += text; return c; });
-    askInsight(company || window.demoContext?.company, i.role, question, i.title, append)
-      .catch(e => append(` [нет ответа: ${e.message}]`))
-      .finally(() => setStreaming(false));
-  };
-  const rate = (v, r) => { setVote(v); setReason(r); if (v === 'yes' || r) send('feedback', { insight: i.id, vote: v, stage: REASONS.find(x => x[0] === r)?.[1] }); };
 
   return <SidePanel open={!!i} onClose={onClose} size={500} hasCloser>
     {i && <>
-      <SidePanel.Header title={i.role} hasCloser />
+      <SidePanel.Header title={i.roleLabel || i.role} hasCloser />
       <SidePanel.Content>
         <div className="panel">
           <Title tag="h2" view="small" weight="bold">{i.title}</Title>
@@ -243,14 +222,7 @@ function InsightPanel({ insight: i, sources, onClose, onHide, company }) {
               {called ? 'Менеджер свяжется с вами' : 'Связаться с менеджером'}</Button>]}>
             {i.bank_product}</Plate>}
 
-          <section className="layer">
-            <Typography.Text view="caps" weight="bold" tag="div">Вопрос по событию</Typography.Text>
-            {qa.map(([qq, a], n) => <p key={n} className="qa"><b>{qq}</b><br />{a}
-              {streaming && n === qa.length - 1 && <Spinner size="s" visible />}</p>)}
-            {streaming && qa.length === 0 && <p className="qa"><Spinner size="s" visible /></p>}
-            <Input block size={48} placeholder="Например: что будет, если ЦБ снизит ставку?" value={q}
-              onChange={e => setQ(e.target.value)} onKeyDown={e => e.key === 'Enter' && ask()} />
-          </section>
+          <InsightDiscussion company={company} insight={i} />
 
           <section className="layer">
             <Typography.Text view="caps" weight="bold" tag="div">Источники</Typography.Text>
@@ -276,15 +248,7 @@ function InsightPanel({ insight: i, sources, onClose, onHide, company }) {
       </SidePanel.Content>
       <SidePanel.Footer>
         <div className="fb">
-          {vote === 'no' && !reason && <div className="fb-reasons">{REASONS.map(([r]) =>
-            <Tag key={r} size={32} onClick={() => rate('no', r)}>{r}</Tag>)}</div>}
           <div className="fb-btns">
-            {vote && (vote === 'yes' || reason)
-              ? <Typography.Text view="primary-small" color="secondary">Спасибо! Учтём при подборе событий.</Typography.Text>
-              : <>
-                <Button size={40} view="secondary" onClick={() => rate('yes')}>Полезно</Button>
-                <Button size={40} view="secondary" onClick={() => setVote('no')}>Не полезно</Button>
-              </>}
             <Button size={40} view="text" onClick={() => onHide(i.id)}>Скрыть</Button>
           </div>
         </div>

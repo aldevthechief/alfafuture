@@ -1,5 +1,7 @@
 """API, actual parallel jobs and immutable bank views; synthetic PDFs and processors, no model calls."""
 import io
+import os
+import json
 import tempfile
 import threading
 import unittest
@@ -68,6 +70,42 @@ class CacheTests(unittest.TestCase):
             self.assertEqual(other.get_or_compute('a',lambda:self.fail('must reuse disk cache')),1)
 
 class CatalogTests(unittest.TestCase):
+    def test_chart_modes_have_separate_persisted_cache_keys(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            pdf = root/'report.pdf'
+            pdf.write_bytes(pdf_bytes())
+            make = Mock(side_effect=processor)
+            catalog = Catalog(root/'catalog', make)
+            keys = []
+            for mode in ('all', 'selective', 'off'):
+                options = PreparationOptions(chart_mode=mode)
+                result = catalog.prepare(pdf, options, None)
+                keys.append(result['key'])
+                manifest = json.loads((catalog.root/'reports'/result['key']/'ready.json').read_text())
+                self.assertEqual(manifest['options']['chart_mode'], mode)
+                self.assertEqual(catalog.prepare(pdf, options, None)['key'], result['key'])
+            self.assertEqual(len(set(keys)), 3)
+            self.assertEqual(make.call_count, 3)
+            with patch.dict(os.environ, {'BANK_CHARTS':'selective'}):
+                self.assertEqual(catalog.prepare(pdf, PreparationOptions(), None)['key'], keys[1])
+
+    def test_legacy_manifest_mode_does_not_follow_changed_environment(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            pdf = root/'report.pdf'
+            pdf.write_bytes(pdf_bytes())
+            catalog = Catalog(root/'catalog', processor)
+            result = catalog.prepare(pdf, PreparationOptions(chart_mode='all'), None)
+            path = catalog.root/'reports'/result['key']/'ready.json'
+            manifest = json.loads(path.read_text())
+            del manifest['options']['chart_mode']
+            path.write_text(json.dumps(manifest))
+            make = Mock(side_effect=processor)
+            with patch.dict(os.environ, {'BANK_CHARTS':'off'}):
+                Catalog(catalog.root, make).snapshot(None)
+            self.assertEqual(make.call_args.args[1].chart_mode, 'all')
+
     def test_ready_report_does_not_mutate_existing_snapshot_and_cache_is_reused(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp); pdf=root/'old.pdf';pdf.write_bytes(pdf_bytes())
@@ -104,6 +142,79 @@ class CatalogTests(unittest.TestCase):
             self.assertNotIn('bad.pdf',catalog.current)
 
 class ApiTests(unittest.TestCase):
+    def test_judge_uses_the_bank_snapshot_after_ocr_and_chart_preparation(self):
+        import pipeline
+        from test_merge_regressions import NEWS
+        for flag in ('ocr','bank_charts','bank_tables','bank_digest','bank_prepare'):
+            with self.subTest(flag=flag), tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp)
+                (root/'report.pdf').write_bytes(pdf_bytes())
+                service=Service(root/'api',models_factory=Mock())
+                order=[]
+                bank=SimpleNamespace(parts=['prepared-report'])
+                pipe=SimpleNamespace(run=lambda *a,**kw:[])
+                def prepared(*a,**kw):
+                    order.append('prepare');return {'id':'prepared-report'}
+                def snapshot(*a):
+                    order.append('snapshot');return 'ocr-version',BankLibrary([]),bank
+                def judge(*a,**kw):
+                    order.append('judge');self.assertIs(kw['bank'],bank);return pipe
+                with patch('backend.service.PDF_DIR',root), patch('backend.service.DATA',root), \
+                     patch('backend.service.news_pool',return_value=NEWS), patch('common.search.news_pool',return_value=NEWS), \
+                     patch.object(service,'prepare',side_effect=prepared) as prepare_report, \
+                     patch.object(service.pdfs,'wait',return_value={'status':'succeeded'}), \
+                     patch.object(service.catalog,'snapshot',side_effect=snapshot), \
+                     patch.object(pipeline,'InsightPipeline',side_effect=judge), \
+                     patch.object(pipeline,'run_loop',side_effect=AssertionError('legacy engine called')), \
+                     TestClient(create_app(service)) as client:
+                    response=client.post('/v1/analyses',json={'company_id':'U_1','source':'news',flag:True,
+                                                            'chart_mode':'selective'})
+                    self.assertEqual(response.status_code,202,response.text)
+                    job=service.agents.wait(response.json()['id'])
+                    self.assertEqual(job['status'],'succeeded',job)
+                    self.assertEqual(job['result']['bank_version'],'ocr-version')
+                    self.assertEqual(order,['prepare','snapshot','judge'])
+                    options=prepare_report.call_args.args[1]
+                    self.assertTrue(options.ocr)
+                    self.assertEqual(options.chart_mode,'selective')
+
+    def test_failed_ocr_preparation_does_not_start_judge_on_an_old_snapshot(self):
+        import pipeline
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            (root/'report.pdf').write_bytes(pdf_bytes())
+            service=Service(root/'api',models_factory=Mock())
+            with patch('backend.service.PDF_DIR',root), \
+                 patch.object(service,'prepare',return_value={'id':'bad-report'}), \
+                 patch.object(service.pdfs,'wait',return_value={'status':'failed','error':'OCR unavailable'}), \
+                 patch.object(service.catalog,'snapshot') as snapshot, \
+                 patch.object(pipeline,'InsightPipeline') as judge, TestClient(create_app(service)) as client:
+                response=client.post('/v1/analyses',json={'company_id':'U_1','ocr':True})
+                job=service.agents.wait(response.json()['id'])
+                self.assertEqual(job['status'],'failed',job)
+                self.assertIn('OCR unavailable',job['error'])
+                snapshot.assert_not_called()
+                judge.assert_not_called()
+
+    def test_analysis_passes_chart_mode_to_report_preparation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root/'report.pdf').write_bytes(pdf_bytes())
+            service = Service(root/'api', models_factory=Mock(), processor=processor)
+            try:
+                with patch('backend.service.PDF_DIR', root), \
+                     patch.object(service, 'prepare', return_value={'id':'report-job'}) as prepare_report, \
+                     patch.object(service.pdfs, 'wait', return_value={'status':'succeeded'}), \
+                     patch.object(service.catalog, 'snapshot', return_value=('version',BankLibrary([]),SimpleNamespace(parts=[]))), \
+                     patch('stage2_company_facts.profile.integration.load_company', return_value=SimpleNamespace(facts=[])), \
+                     patch('stage5_insight_detection.analytics_insights.service.analytics_run', return_value=None):
+                    result = service.run(AnalysisRequest(company_id='U_1', source='analytics', ocr=True,
+                                                        chart_mode='selective'))
+                self.assertEqual(result['status'], 'succeeded')
+                self.assertEqual(prepare_report.call_args.args[1].chart_mode, 'selective')
+            finally:
+                service.close()
+
     def test_swagger_upload_health_status_and_rejected_payloads(self):
         with tempfile.TemporaryDirectory() as tmp:
             service=Service(Path(tmp),models_factory=lambda:None,processor=processor)
@@ -111,22 +222,29 @@ class ApiTests(unittest.TestCase):
                 self.assertEqual(client.get('/docs').status_code,200)
                 schema=client.get('/openapi.json').json()
                 props=schema['components']['schemas']['AnalysisRequest']['properties']
-                for name in ['engine','retrieval','source','workers','bank_prepare','ocr','bank_review',
-                             'bank_insights','analytics_refresh','analytics_cache_only','analytics_share',
-                             'ocr_budget','charts_budget','tables_budget','digest_budget','bank_budget']:
+                for name in ['engine','retrieval','source','workers','bank_prepare','ocr',
+                             'analytics_refresh','analytics_cache_only','analytics_share','chart_mode',
+                             'ocr_budget','charts_budget','tables_budget','digest_budget']:
                     self.assertIn(name,props)
+                self.assertEqual(props['engine']['const'],'judge')
+                for name in ['bank_review','bank_insights','bank_budget']:
+                    self.assertNotIn(name,props)
                 response=client.post('/v1/reports/upload',files={'files':('report.pdf',pdf_bytes(),'application/pdf')},
-                                     data={'options':'{"charts":false,"tables":false,"digests":false}'})
+                                     data={'options':'{"charts":false,"tables":false,"digests":false,"chart_mode":"selective"}'})
                 self.assertEqual(response.status_code,202,response.text)
                 job=response.json()['jobs'][0]
                 self.assertEqual(service.pdfs.wait(job['id'])['status'],'succeeded')
+                self.assertEqual(job['request']['options']['chart_mode'],'selective')
                 self.assertEqual(client.get('/v1/jobs/'+job['id']).json()['status'],'succeeded')
                 self.assertIn('report.pdf',client.get('/v1/reports').json()['active'])
                 self.assertEqual(client.get('/health').status_code,200)
                 self.assertEqual(client.get('/v1/jobs/unknown').status_code,404)
                 self.assertEqual(client.post('/v1/reports/upload',files={'files':('x.pdf',b'garbage','application/pdf')}).status_code,422)
-                self.assertEqual(client.post('/v1/analyses',json={'company_id':'U_1','bank_prepare':True}).status_code,422)
+                self.assertEqual(client.post('/v1/analyses',json={'company_id':'U_1','engine':'loop'}).status_code,422)
                 self.assertEqual(client.post('/v1/analyses',json={'company_id':'../unsafe'}).status_code,422)
+                self.assertEqual(client.post('/v1/reports/prepare',json={'chart_mode':'unknown'}).status_code,422)
+                self.assertEqual(client.get('/v1/options').json()['chart_modes'],['all','selective','off'])
+                self.assertEqual(client.get('/v1/options').json()['engines'],['judge'])
 
     def test_upload_finishes_while_analysis_uses_older_bank_snapshot(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -190,7 +308,8 @@ class ApiTests(unittest.TestCase):
                 self.assertEqual(specific,[result['news_id']])
 
     def test_invalid_flag_combinations_and_infinite_budgets(self):
-        for kwargs in [dict(ocr_budget=1),dict(bank_budget=1),dict(analytics_refresh=True,analytics_cache_only=True),
+        for kwargs in [dict(ocr_budget=1),dict(bank_budget=1),dict(chart_mode='off'),dict(ocr=True,chart_mode='unknown'),
+                       dict(analytics_refresh=True,analytics_cache_only=True),
                        dict(role='unknown'),dict(engine='loop',bank_insights=True,source='both'),
                        dict(engine='loop',bank_review=True,bank_budget=float('inf'))]:
             with self.subTest(kwargs=kwargs),self.assertRaises(ValidationError):AnalysisRequest(company_id='U_1',**kwargs)

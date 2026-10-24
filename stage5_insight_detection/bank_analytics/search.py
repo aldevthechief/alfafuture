@@ -49,10 +49,8 @@ def paragraphs(text: str, min_chars: int = 200) -> list[str]:
 
 @lru_cache(None)
 def encoder():
-    import torch
-    from sentence_transformers import SentenceTransformer
-    cuda = torch.cuda.is_available()
-    return SentenceTransformer(E5, device='cuda' if cuda else 'cpu', model_kwargs={'torch_dtype': torch.float16} if cuda else {})
+    from common.encoders import load_encoder
+    return load_encoder(E5)
 
 
 def embed(texts: list[str], folder: Path) -> np.ndarray:
