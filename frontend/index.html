@@ -398,6 +398,7 @@ function showView(view, title) {
   if (view === 'stub') $('#stubTitle').textContent = title || '';
   document.body.classList.remove('side-open');
   window.scrollTo(0, 0);
+  window.dispatchEvent(new CustomEvent('demo:view', { detail: { view } }));
 }
 window.showView = showView;
 document.addEventListener('click', e => {

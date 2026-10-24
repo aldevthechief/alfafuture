@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import ValidationError
 
 from backend.jobs import QueueFull
+from backend.insight_previews import detail, metadata, preview_feed
 from backend.schemas import AnalysisRequest, AskRequest, BatchRequest, PreparationRequest, SearchRequest, JobResponse
 from backend.service import Service
 from common.roles import roles
@@ -86,21 +87,40 @@ def create_app(service=None, cors_origins=None):
         return dict(jobs=jobs,remaining=0)
 
     @app.get('/v1/jobs/{job_id}',response_model=JobResponse,tags=['jobs'],summary='Status, result or error of an analysis/PDF job')
-    def job(job_id: str, x_user_id: User = None):
+    def job(job_id: str, x_user_id: User = None, include_result: bool = True):
         for queue in (svc().agents,svc().pdfs):
             try:
-                result = queue.get(job_id)
+                result = queue.get(job_id, project=None if include_result else metadata)
                 if result['request'].get('user_id') not in (None, x_user_id):
                     raise HTTPException(404,'Unknown job')
                 return result
             except KeyError: pass
         raise HTTPException(404,'Unknown job')
 
+    def insight_projection(job_id, user_id, project):
+        def owned(job):
+            if job['request'].get('user_id') not in (None, user_id):
+                raise HTTPException(404, 'Unknown job')
+            return project(job)
+        try:
+            return svc().agents.get(job_id, project=owned)
+        except KeyError:
+            raise HTTPException(404, 'Unknown insight')
+
+    @app.get('/v1/jobs/{job_id}/insights',tags=['jobs'])
+    def insight_previews(job_id: str, x_user_id: User = None):
+        return insight_projection(job_id, x_user_id, preview_feed)
+
+    @app.get('/v1/jobs/{job_id}/insights/{result_index}',tags=['jobs'])
+    def insight_detail(job_id: str, result_index: int, x_user_id: User = None):
+        return insight_projection(job_id, x_user_id, lambda job: detail(job, result_index))
+
     @app.get('/v1/jobs',tags=['jobs'])
-    def jobs(x_user_id: User = None):
-        analyses = [svc().agents.get(i) for i in list(svc().agents.items)]
+    def jobs(x_user_id: User = None, include_results: bool = True):
+        project = None if include_results else metadata
+        analyses = [svc().agents.get(i, project=project) for i in list(svc().agents.items)]
         return dict(analyses=[job for job in analyses if job['request'].get('user_id') in (None, x_user_id)],
-                    reports=[svc().pdfs.get(i) for i in list(svc().pdfs.items)])
+                    reports=[svc().pdfs.get(i, project=project) for i in list(svc().pdfs.items)])
 
     @app.get('/v1/reports',tags=['reports'],summary='Atomically published report versions')
     def reports():

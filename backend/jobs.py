@@ -62,9 +62,10 @@ class Jobs:
             raise
         return self.get(item['id'])
 
-    def get(self,id):
+    def get(self,id,project=None):
         with self.lock:
-            return json.loads(json.dumps(self.items[id]))
+            item=self.items[id]
+            return json.loads(json.dumps(project(item) if project is not None else item))
 
     def wait(self,id):
         self.futures[id].result()

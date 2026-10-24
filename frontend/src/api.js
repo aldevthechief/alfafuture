@@ -25,7 +25,7 @@ const call = (path, init) => requestJson(BASE, path, init);
 
 // latest analysis of this company and role: the finished one to show, and the one still running (if newer)
 export async function latestJobs(company, role) {
-  const { analyses } = await call('/v1/jobs');
+  const { analyses } = await call('/v1/jobs?include_results=false');
   const mine = analyses.filter(j => j.request.company_id === company && j.request.role === role)
     .sort((a, b) => b.created_at.localeCompare(a.created_at));
   const personal = mine.filter(j => j.request.user_id === USER_ID);
@@ -39,7 +39,7 @@ export const startAnalysis = (company, role) =>
 
 export async function waitJob(id, cancelled, every = 3000) {
   for (;;) {
-    const job = await call(`/v1/jobs/${id}`);
+    const job = await call(`/v1/jobs/${id}?include_result=false`);
     if (DONE.includes(job.status) || cancelled()) return job;
     await sleep(every);
   }
@@ -50,6 +50,28 @@ export const companyFacts = id => facts[id] ??= call(`/v1/companies/${id}`).then
 
 const BLOCKS = ['what_happened', 'why_it_matters', 'risks', 'opportunities', 'hypotheses', 'bank_view'];
 const claims = list => (list || []).map(c => ({ text: c.text, sources: c.sources || [] }));
+
+export const jobPreviews = id => call(`/v1/jobs/${id}/insights`);
+
+const openedInsights = new Map();
+export function loadInsight(card, company) {
+  if (!card.preview) return Promise.resolve(card);
+  const key = JSON.stringify([USER_ID, company, card.job_id, card.result_index]);
+  if (!openedInsights.has(key)) {
+    const promise = call(`/v1/jobs/${card.job_id}/insights/${card.result_index}`).then(async job => {
+      const row = job.result.results[0];
+      const legacyFacts = !row.evidence && !row.evidence_facts ? await companyFacts(company) : [];
+      return { ...toFeed(job, legacyFacts).insights[0], id: card.id, roleLabel: card.roleLabel };
+    }).catch(error => {
+      if (openedInsights.get(key) === promise) openedInsights.delete(key);
+      throw error;
+    });
+    openedInsights.set(key, promise);
+    // A long browsing session must not retain full evidence for every previously opened card.
+    while (openedInsights.size > 12) openedInsights.delete(openedInsights.keys().next().value);
+  }
+  return openedInsights.get(key);
+}
 
 // job.result.results (pipeline rows, contract v2) → { computed_at, insights, sources } as in feed.json
 export function toFeed(job, companyFacts = []) {
