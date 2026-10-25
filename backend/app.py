@@ -127,14 +127,10 @@ def create_app(service=None, cors_origins=None):
 
     @app.get('/v1/jobs/{job_id}/compact',tags=['jobs'],summary='Screen versions of the insights of a finished analysis')
     async def compact(job_id: str, x_user_id: User = None):
-        require_inference()
         import asyncio
-        try:
-            if svc().agents.get(job_id, project=metadata)['request'].get('user_id') not in (None, x_user_id):
-                raise KeyError(job_id)
-            return await asyncio.to_thread(svc().compact, job_id)
-        except KeyError as exc:
-            raise HTTPException(404, 'Unknown job') from exc
+        job = insight_projection(job_id, x_user_id, lambda job: job)
+        return await asyncio.to_thread(svc().compact, job_id, job=job,
+                                       cache_only=os.environ.get('CABINET_MODE', 'full') == 'server')
 
     @app.get('/v1/jobs',tags=['jobs'])
     def jobs(x_user_id: User = None, include_results: bool = True):

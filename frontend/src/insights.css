@@ -93,3 +93,16 @@
 @media(max-width:960px){.iwin-grid{grid-template-columns:minmax(0,1fr)}.iwin-side{position:static}.iwin .ro{grid-template-columns:minmax(0,1fr)}}
 
 .insight-opening{position:fixed;right:24px;bottom:24px;z-index:100;padding:12px 18px;border-radius:12px;background:var(--card);box-shadow:0 4px 16px rgba(11,31,53,.12)}
+
+/* Direction and importance are separate: high impact never implies a positive outcome. */
+.insight-tone-negative{background:var(--signal-negative-bg);border-left:4px solid var(--signal-negative)}
+.insight-tone-positive{background:var(--signal-positive-bg);border-left:4px solid var(--signal-positive)}
+.insight-signal{display:inline-flex;align-items:center;gap:5px;padding:3px 8px;border-radius:7px;font-size:12.5px;font-weight:600;line-height:1.4}
+.signal-negative{color:var(--signal-negative);background:var(--signal-negative-bg)}
+.signal-positive{color:var(--signal-positive);background:var(--signal-positive-bg)}
+.signal-neutral{color:var(--text-2);background:var(--fill)}
+.signal-important{color:var(--signal-important);background:var(--signal-important-bg)}
+.insight-detail-tone-negative>h2{color:var(--signal-negative)}
+.insight-detail-tone-positive>h2{color:var(--signal-positive)}
+.layer-risk{border-left:4px solid var(--signal-negative);background:var(--signal-negative-bg)}
+.layer-opportunity{border-left:4px solid var(--signal-positive);background:var(--signal-positive-bg)}

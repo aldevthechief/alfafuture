@@ -13,13 +13,13 @@ from backend.insight_previews import preview_feed
 CACHE = Path(__file__).resolve().parents[1] / 'stage5_insight_detection/analytics_insights/cache'
 NEWS_CACHE = Path(__file__).with_name('demo_cache')
 ACCOUNTS = (
-    dict(id='finance-ceo', company_id='U_14366', name='Север Финанс', initials='СФ', sector='Финансы и лизинг',
+    dict(id='finance-ceo', company_id='U_14366', initials='ФЛ', sector='Финансовый лизинг',
          city='Москва', role='ceo', color='blue', balance=912400150.30, credit=3000000000, deposit=0),
-    dict(id='finance', company_id='U_14366', name='Север Финанс', initials='СФ', sector='Финансы и лизинг',
+    dict(id='finance', company_id='U_14366', initials='ФЛ', sector='Финансовый лизинг',
          city='Москва', role='cfo', color='blue', balance=912400150.30, credit=3000000000, deposit=0),
-    dict(id='development', company_id='U_177581', name='Горизонт Девелопмент', initials='ГД', sector='Строительство',
+    dict(id='development', company_id='U_177581', initials='СМ', sector='Строительно-монтажные работы',
          city='Москва', role='ceo', color='amber', balance=1786300420, credit=5000000000, deposit=0),
-    dict(id='energy', company_id='U_57706', name='СибТопливо', initials='СТ', sector='Топливо и энергетика',
+    dict(id='energy', company_id='U_57706', initials='ОТ', sector='Оптовая торговля топливом',
          city='Москва', role='treasury', color='green', balance=1428750900, credit=2000000000, deposit=800000000),
 )
 
@@ -38,7 +38,8 @@ def catalog(jobs=(), user_id=None, root=None):
         if not feed['insights']:
             continue
         spec = roles()[account['role']]
-        accounts.append(dict(account, job_id=account_job_id(account), role_title=spec['title'],
+        accounts.append(dict(account, name=company_name(account['company_id'], account['sector']),
+                             job_id=account_job_id(account), role_title=spec['title'],
                              insight_count=len(feed['insights']), updated_at=feed['computed_at']))
     return dict(accounts=accounts, roles=[dict(id=key, title=value['title']) for key, value in roles().items()])
 
@@ -204,5 +205,10 @@ def search_companies(query):
     if not match.any():
         match = table['SYNTHETIC_U'].str.casefold().str.contains(needle, regex=False) | \
                 table['MAINOKVED_NAME'].str.casefold().str.contains(needle, regex=False)
-    return [dict(id=row.SYNTHETIC_U, name=f'Компания {row.SYNTHETIC_U}',
+    return [dict(id=row.SYNTHETIC_U, name=company_name(row.SYNTHETIC_U, row.MAINOKVED_NAME),
                  industry=row.MAINOKVED_NAME, city=row.CITY) for row in table[match].head(8).itertuples()]
+
+
+def company_name(company_id, activity):
+    activity = re.sub(r'^Деятельность по\s+', '', activity or '', flags=re.I).strip()
+    return f'{activity[:1].upper() + activity[1:] if activity else "Компания"} №{company_id.removeprefix("U_")}'

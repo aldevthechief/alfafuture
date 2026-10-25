@@ -56,9 +56,10 @@ const facts = {};
 export const companyFacts = id => facts[id] ??= call(`/v1/companies/${id}`).then(r => r.facts).catch(() => []);
 
 const BLOCKS = ['what_happened', 'why_it_matters', 'risks', 'opportunities', 'hypotheses', 'bank_view'];
-const claims = list => (list || []).map(c => ({ text: c.text, sources: c.sources || [] }));
+const claims = list => (list || []).map(c => ({ id: c.id, text: c.text, sources: c.sources || [] }));
 
 export const jobPreviews = id => call(`/v1/jobs/${id}/insights`);
+export const compactOf = id => call(`/v1/jobs/${encodeURIComponent(id)}/compact`);
 
 const openedInsights = new Map();
 export function loadInsight(card, company) {
@@ -135,6 +136,7 @@ export function toFeed(job, companyFacts = []) {
       ...Object.fromEntries(BLOCKS.map(k => [k, claims(i[k])])),
       actions: i.actions || [], ai_conclusion: i.ai_conclusion || '',
       confidence: i.confidence || 'medium', bank_product: i.bank_product || '',
+      impact_level: i.impact?.level ?? null,
       not_bank_position: i.not_bank_position, warnings: i.review?.warnings || [],
       trace: i.trace || [],
     };

@@ -34,5 +34,6 @@ def test_compact_enforces_owner_and_server_mode_before_running_models(tmp_path):
         service.compact.assert_not_called()
         assert client.get('/v1/jobs/saved/compact',headers={'X-User-ID':'owner'}).json() == {'card':{'title':'Short'}}
     with patch.dict('os.environ', CABINET_MODE='server'), TestClient(create_app(service)) as client:
-        assert client.get('/v1/jobs/saved/compact',headers={'X-User-ID':'owner'}).status_code == 403
-    service.compact.assert_called_once_with('saved')
+        assert client.get('/v1/jobs/saved/compact',headers={'X-User-ID':'owner'}).status_code == 200
+    assert service.compact.call_args_list[0].kwargs['cache_only'] is False
+    assert service.compact.call_args_list[1].kwargs['cache_only'] is True

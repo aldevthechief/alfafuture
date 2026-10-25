@@ -15,7 +15,8 @@ class InsightPreviewTests(unittest.TestCase):
         self.service = Service(Path(self.tmp.name))
         self.row = dict(status='ready', news_id=41, insight=dict(
             id='card-41', title='Кредит', role='cfo', why_it_matters=[dict(text='Стоимость долга')],
-            risks=[dict(text='Риск')], opportunities=[], actions=['Проверить ставку'], bank_view=[]),
+            risks=[dict(text='Риск')], opportunities=[], actions=['Проверить ставку'], bank_view=[],
+            impact=dict(level='high', criteria='Existing assessment', estimate='1%')),
             evidence=dict(role='cfo', facts=[dict(id='fact:1', text='original evidence ' * 10000)]))
         self.service.agents.items['job-1'] = dict(id='job-1', kind='analysis', status='succeeded',
             request=dict(company_id='U_1', role='cfo', user_id='alice'), created_at='2026-10-25',
@@ -42,6 +43,8 @@ class InsightPreviewTests(unittest.TestCase):
         card = response.json()['insights'][0]
         self.assertEqual(card['id'], 'card-41')
         self.assertEqual(card['counts']['risks'], 1)
+        self.assertEqual(card['impact_level'], 'high')
+        self.assertIsNone(response.json()['insights'][1]['impact_level'])
         self.assertEqual(card['result_index'], 0)
         self.assertTrue(card['preview'])
         self.assertNotIn('evidence', response.text)

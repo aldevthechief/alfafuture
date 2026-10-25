@@ -30,6 +30,7 @@ class CabinetTests(unittest.TestCase):
             accounts = client.get('/v1/cabinet/accounts').json()['accounts']
             self.assertEqual(len(accounts), 4)
             self.assertEqual({a['role'] for a in accounts}, {'ceo', 'cfo', 'treasury'})
+            self.assertTrue(all(a['name'] == f"{a['sector']} №{a['company_id'].removeprefix('U_')}" for a in accounts))
             for account in accounts:
                 url = f"/v1/jobs/{account['job_id']}/insights"
                 preview = client.get(url)
@@ -187,6 +188,35 @@ class CabinetTests(unittest.TestCase):
             self.assertEqual(search_companies('.*'), [])
             self.assertEqual(search_companies('u'), [])
         self.models.assert_not_called()
+
+    def test_demo_compact_versions_use_preview_ids_and_can_be_read_without_models_in_server_mode(self):
+        async def shortened(self, insight):
+            return {'title': 'Кратко: ' + insight['title'], 'lead': 'Краткое описание', 'facts': [],
+                    'why': [], 'important_if': ['Есть плавающая ставка'], 'risks': [],
+                    'opportunities': [], 'actions': [], 'bank_view': []}
+
+        class Model:
+            def model_copy(self, update): return self
+
+        self.service.models_factory = Mock(return_value=Mock(agent=Mock(return_value=Model())))
+        with TestClient(create_app(self.service)) as client:
+            job_id = 'demo-U_14366-ceo'
+            path = f'/v1/jobs/{job_id}/compact'
+            with patch.dict('os.environ', CABINET_MODE='server'):
+                self.assertEqual(client.get(path).json(), {})
+                self.service.models_factory.assert_not_called()
+            with patch.dict('os.environ', CABINET_MODE='full'), \
+                 patch('stage6_insight_generation.insight_compact.compact.InsightCompactor.__init__', lambda self, model: None), \
+                 patch('stage6_insight_generation.insight_compact.compact.InsightCompactor.acompact', shortened):
+                response = client.get(path)
+                self.assertEqual(response.status_code, 200, response.text)
+                versions = response.json()
+                cards = client.get(f'/v1/jobs/{job_id}/insights').json()['insights']
+                self.assertEqual(set(versions), {card['id'] for card in cards})
+            before = self.service.models_factory.call_count
+            with patch.dict('os.environ', CABINET_MODE='server'):
+                self.assertEqual(client.get(path).json(), versions)
+                self.assertEqual(self.service.models_factory.call_count, before)
 
     def test_server_startup_does_not_prepare_reports(self):
         with patch.dict('os.environ', CABINET_MODE='server'), \

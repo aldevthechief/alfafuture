@@ -23,6 +23,7 @@ def preview_feed(job):
             published=insight.get('event_date') or news.get('date') or job.get('finished_at'),
             channel=insight.get('channel') or ('Аналитика Банка' if bank else 'Новости'),
             confidence=insight.get('confidence') or 'medium',
+            impact_level=(insight.get('impact') or {}).get('level'),
             counts={key: len(insight.get(key) or []) for key in ('risks', 'opportunities', 'actions', 'bank_view')},
         ))
     return dict(computed_at=job.get('finished_at') or job['created_at'], insights=cards,

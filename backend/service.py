@@ -199,26 +199,26 @@ class Service:
                 pass
         return '\n\n'.join(parts) + f'\n\nВопрос: {question}'
 
-    def compact(self, job_id: str) -> dict:
+    def compact(self, job_id: str, job=None, cache_only=False) -> dict:
         """Screen versions of a finished job's insights, {insight id: compact or None (UI shows the full one)}.
         Computed once per insight (GLM, low reasoning, all in parallel) and kept in api/compact/<job>.json. Called
         right after an analysis finishes (auto_compact) and by the API; a per-job lock keeps it to one computation."""
         import asyncio, threading
         with self._compact_locks.setdefault(job_id, threading.Lock()):
-            return asyncio.run(self._compact(job_id))
+            return asyncio.run(self._compact(job_id, job=job, cache_only=cache_only))
 
-    async def _compact(self, job_id: str) -> dict:
+    async def _compact(self, job_id: str, job=None, cache_only=False) -> dict:
         import asyncio, json
         from stage6_insight_generation.insight_compact.compact import InsightCompactor
         path = self.root / 'compact' / f'{job_id}.json'
-        results = (self.agents.get(job_id).get('result') or {}).get('results', [])
+        results = ((job if job is not None else self.agents.get(job_id)).get('result') or {}).get('results', [])
         # the id the UI gives the card (backend/insight_previews.py): its own id, else the row index in the results
         ids = {id(r): r['insight'].get('id') or f"row-{n}-{r.get('news_id', 'bank')}"
                for n, r in enumerate(results) if r.get('status') == 'ready' and r.get('insight')}
         rows = [r for r in results if id(r) in ids]
         key = lambda r: ids[id(r)]
         done = json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
-        if todo := [r for r in rows if key(r) not in done]:
+        if not cache_only and (todo := [r for r in rows if key(r) not in done]):
             model = self.models_factory().agent(temperature=0.0).model_copy(update={'reasoning_effort': 'low'})
             compactor = InsightCompactor(model)
             found = await asyncio.gather(*(compactor.acompact(r['insight']) for r in todo), return_exceptions=True)
@@ -229,7 +229,7 @@ class Service:
             done |= {key(r): None if isinstance(c, BaseException) else c for r, c in zip(todo, found)}
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(json.dumps(done, ensure_ascii=False), encoding='utf-8')
-        return done
+        return {key(r): done[key(r)] for r in rows if key(r) in done}
 
     def latest_rows(self, company_id: str, role: str, user_id: str | None = None) -> list[dict]:
         """Result rows of the newest finished backend analysis of this pair that this user may see: their own first,

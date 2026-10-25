@@ -1,7 +1,5 @@
-// The insight view (24.10 review): a short card in the feed and a large window per insight — the screen
-// version of the insight on the left (the full insight when there is none), the persisted AI discussion and
-// merged sources on the right. The side-panel variant was removed on 24.10: the window is the demo view.
-import React, { memo, useEffect, useMemo, useState } from 'react';
+// A wide insight workspace with separate reading and discussion tabs.
+import React, { memo, useEffect, useId, useMemo, useState } from 'react';
 import { ModalDesktop as Modal } from '@alfalab/core-components/modal/desktop';
 import { Button } from '@alfalab/core-components/button';
 import { Status } from '@alfalab/core-components/status';
@@ -11,6 +9,11 @@ import { InsightDiscussion } from './discussion.jsx';
 import { loadInsight } from './api.js';
 
 import { CONFIDENCE, day, view } from './insightView.js';
+import { insightSignal } from './insightSignal.js';
+import { SignalBadge } from './insightSignal.jsx';
+import { InsightIcon } from './insightIcons.jsx';
+import { InsightTabs } from './insightTabs.jsx';
+import './insightWorkspace.css';
 
 const NO_TRANSITION = { enter: false, exit: false, timeout: 0 };
 
@@ -78,9 +81,12 @@ export function InsightWindow({ insight: i, compact, sources = {}, company, onCl
       .catch(err => { if (active) setError(err.message); });
     return () => { active = false; };
   }, [i, company, retry]);
-  if (!detail) return <Modal open onClose={onClose} size={1140} hasCloser transitionProps={NO_TRANSITION}>
+  if (!detail) return <Modal open onClose={onClose} size={1140} hasCloser transitionProps={NO_TRANSITION}
+    className="insight-workbench" wrapperClassName="workbench-overlay" contentProps={{ className: 'workbench-frame' }}
+    wrapperProps={{ 'aria-modal': true, 'aria-label': 'Загрузка инсайта' }}>
     <Modal.Header hasCloser sticky />
-    <Modal.Content><div className="iwin">
+    <Modal.Content><div className={`iwin insight-detail-tone-${insightSignal(i).tone}`}>
+      <div className="ic-tags"><SignalBadge insight={i} /></div>
       <Typography.Title font="system" tag="h2" view="medium" weight="bold">{i.title}</Typography.Title>
       {error ? <><p role="alert">Не удалось загрузить инсайт: {error}</p>
         <Button size={40} view="secondary" onClick={() => setRetry(n => n + 1)}>Повторить</Button></>
@@ -92,42 +98,88 @@ export function InsightWindow({ insight: i, compact, sources = {}, company, onCl
 }
 
 function InsightDetails({ insight: i, compact, sources, company, onClose, onHide }) {
+  const id = useId();
+  const [tab, setTab] = useState('overview');
+  const [expanded, setExpanded] = useState(false);
+  const changeTab = next => {
+    setTab(next);
+    requestAnimationFrame(() => document.getElementById(`${id}-${next}-tab`)?.focus());
+  };
   const [feedbackTarget, setFeedbackTarget] = useState(null);
   const v = useMemo(() => view(i, compact), [i, compact]);
   const [color, conf] = CONFIDENCE[i.confidence] || CONFIDENCE.low;
   const used = useMemo(() => [...new Set([...v.facts, ...v.why, ...v.risks, ...v.opportunities, ...v.bank_view, ...(i.hypotheses || [])].flatMap(x => x.sources || []))], [v, i]);
 
-  return <Modal open onClose={onClose} size={1140} hasCloser transitionProps={NO_TRANSITION}>
-    <Modal.Header hasCloser sticky />
-    <Modal.Content>
-      <div className="iwin">
-        <p className="iwin-disc">Не является инвестиционной рекомендацией.{!i.bank_view.length && ' Вывод не является официальной позицией Банка.'}</p>
-        <div className="ic-tags">
-          <Status color="blue" size={20}>{i.channel}</Status>
-          <Status color={color} size={20}>{conf}</Status>
-          {i.bank_view.length > 0 && <Status color="purple" size={20}>Есть позиция Банка</Status>}
-          <span className="ic-date">{day(i.published)}</span>
+  return <Modal open onClose={onClose} size={1140} transitionProps={NO_TRANSITION}
+    className={`insight-workbench${expanded ? ' workbench-expanded' : ''}`} wrapperClassName={`workbench-overlay${expanded ? ' is-expanded' : ''}`}
+    contentProps={{ className: 'workbench-frame' }}
+    wrapperProps={{ 'aria-modal': true, 'aria-labelledby': `${id}-title` }}>
+    <header className="workbench-header">
+      <div className="workbench-heading">
+        <div className="workbench-eyebrow"><span className="workbench-mark"><InsightIcon name="sparkle" size={14} /></span>
+          Персональный инсайт<span>·</span>{i.channel}<span>·</span>{day(i.published)}</div>
+        <h2 id={`${id}-title`} title={v.title}>{v.title}</h2>
+      </div>
+      <div className="workbench-controls">
+        <button className="workbench-icon-button workbench-expand" type="button" onClick={() => setExpanded(value => !value)}
+          aria-label={expanded ? 'Уменьшить окно' : 'Развернуть окно'} title={expanded ? 'Уменьшить окно' : 'Развернуть окно'}>
+          <InsightIcon name={expanded ? 'collapse' : 'expand'} />
+        </button>
+        <button className="workbench-icon-button" type="button" onClick={onClose} aria-label="Закрыть инсайт" title="Закрыть · Esc">
+          <InsightIcon name="close" />
+        </button>
+      </div>
+    </header>
+    <InsightTabs id={id} tab={tab} onChange={changeTab} />
+    <div className="workbench-panels">
+      <section className="workbench-panel workbench-overview" id={`${id}-overview-panel`} role="tabpanel"
+        aria-labelledby={`${id}-overview-tab`} hidden={tab !== 'overview'} tabIndex={0}>
+        <div className={`iwin insight-detail-tone-${insightSignal(i).tone}`}>
+          <div className="ic-tags">
+            <SignalBadge insight={i} />
+            <Status color={color} size={20}>{conf}</Status>
+            {i.bank_view.length > 0 && <Status color="purple" size={20}>Есть позиция Банка</Status>}
+          </div>
+          <Typography.Text view="primary-large" color="secondary" tag="p">{v.lead}</Typography.Text>
+          <div className="iwin-grid">
+            <InsightBody insight={i} v={v} compact={compact} sources={sources} />
+            <aside className="iwin-side">
+              <div className="agent-invitation">
+                <span className="agent-avatar"><InsightIcon name="sparkle" size={24} /></span>
+                <span className="agent-eyebrow">ОТ НОВОСТИ К РЕШЕНИЮ</span>
+                <h3>Разберём, что это меняет для вас</h3>
+                <p>Обсудите сценарии, уточните расчёты и определите следующие шаги вместе с агентом.</p>
+                <button type="button" onClick={() => changeTab('chat')}>Обсудить с агентом<InsightIcon name="arrow" size={18} /></button>
+              </div>
+              <Sources ids={used} sources={sources} />
+            </aside>
+          </div>
+          <p className="iwin-disc">Не является инвестиционной рекомендацией.{!i.bank_view.length && ' Вывод не является официальной позицией Банка.'}</p>
         </div>
-        <Typography.Title font="system" tag="h2" view="medium" weight="bold">{v.title}</Typography.Title>
-        <Typography.Text view="primary-large" color="secondary" tag="p">{v.lead}</Typography.Text>
-
-        <div className="iwin-grid">
-          <InsightBody insight={i} v={v} compact={compact} sources={sources} />
-          <aside className="iwin-side">
-            <InsightDiscussion company={company} insight={i} variant="window" feedbackTarget={feedbackTarget} />
+      </section>
+      <section className="workbench-panel workbench-chat" id={`${id}-chat-panel`} role="tabpanel"
+        aria-labelledby={`${id}-chat-tab`} hidden={tab !== 'chat'}>
+        {/* Keep mounted: changing tabs must preserve drafts, scroll and an answer in flight. */}
+        <div className="chat-workspace">
+          <InsightDiscussion company={company} insight={i} variant="workspace" active={tab === 'chat'} feedbackTarget={feedbackTarget} />
+          <aside className="chat-context" aria-label="Контекст обсуждения">
+            <div className="chat-context-heading"><InsightIcon name="document" size={18} /><span>В фокусе разговора</span></div>
+            <div className="ic-tags"><SignalBadge insight={i} /></div>
+            <h3>{v.title}</h3>
+            <p className="chat-context-lead">{v.lead}</p>
+            <button className="chat-context-link" type="button" onClick={() => changeTab('overview')}>К обзору инсайта<InsightIcon name="arrow" size={16} /></button>
+            <details className="chat-context-sources"><summary>Материалы и источники · {used.length}</summary>
             <Sources ids={used} sources={sources} />
+            </details>
+            <div className="chat-context-note"><InsightIcon name="sparkle" size={17} /><p>Один инсайт — отдельный разговор. История обсуждения сохраняется здесь.</p></div>
           </aside>
         </div>
-      </div>
-    </Modal.Content>
-    <Modal.Footer sticky>
-      <div className="fb insight-footer">
-        <div ref={setFeedbackTarget} />
-        <div className="fb-btns">
-          <Button size={40} view="text" onClick={() => onHide(i.id)}>Скрыть</Button>
-        </div>
-      </div>
-    </Modal.Footer>
+      </section>
+    </div>
+    <footer className="workbench-footer" hidden={tab === 'chat'}>
+      <div className="workbench-feedback" ref={setFeedbackTarget} />
+      <Button size={32} view="text" onClick={() => onHide(i.id)}>Скрыть инсайт</Button>
+    </footer>
   </Modal>;
 }
 
@@ -146,16 +198,15 @@ const InsightBody = memo(function InsightBody({ insight: i, v, compact, sources 
             {v.important_if.length > 0 && <Section kind="hyp" label="Особенно важно, если">
               <ul>{v.important_if.map(t => <li key={t}>{t}</li>)}</ul>
             </Section>}
-            {i.hypotheses?.length > 0 && <Section kind="hyp" label="Гипотезы · требуют проверки"><Labeled items={i.hypotheses} /></Section>}
             {(v.risks.length > 0 || v.opportunities.length > 0) && <div className="ro">
-              {v.risks.length > 0 && <Section kind="ai" label="Риски"><Labeled items={v.risks} /></Section>}
-              {v.opportunities.length > 0 && <Section kind="ai" label="Возможности"><Labeled items={v.opportunities} /></Section>}
+              {v.risks.length > 0 && <Section kind="risk" label="🐻 Риски"><Labeled items={v.risks} /></Section>}
+              {v.opportunities.length > 0 && <Section kind="opportunity" label="📈 Возможности"><Labeled items={v.opportunities} /></Section>}
             </div>}
             {v.actions.length > 0 && <Section kind="act" label="Что сделать"><ol>{v.actions.map(a => <li key={a}>{a}</li>)}</ol></Section>}
             {v.bank_view.length
               ? <Section kind="bank" label="Позиция Банка"><ul>{v.bank_view.map((x, n) => <li key={n}>{x.text}</li>)}</ul></Section>
               : <Plate view="attention" title="Аналитики Банка по этой теме нет">Вывод не является официальной позицией Банка.</Plate>}
-            {i.ai_conclusion && <Section kind="ai" label="Итог AI"><p>{i.ai_conclusion}</p></Section>}
+            {!compact && i.ai_conclusion && <Section kind="ai" label="Итог AI"><p>{i.ai_conclusion}</p></Section>}
             {i.bank_product && <Plate view="common" title="Чем может помочь Банк">{i.bank_product}</Plate>}
             {i.trace?.length > 0 && <details className="trace">
               <summary>Как мы пришли к выводу</summary>
