@@ -10,7 +10,6 @@ python -X utf8 stage5_insight_detection/bank_analytics/search.py "ключева
 """
 import argparse, hashlib, json, re, sys
 from datetime import date
-from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
@@ -47,10 +46,9 @@ def paragraphs(text: str, min_chars: int = 200) -> list[str]:
     return out + [buf] if buf else out
 
 
-@lru_cache(None)
 def encoder():
     from common.encoders import load_encoder
-    return load_encoder(E5)
+    return load_encoder(E5)  # the same e5 instance as retrieval v2 (common/encoders.py: one copy per model)
 
 
 def embed(texts: list[str], folder: Path) -> np.ndarray:

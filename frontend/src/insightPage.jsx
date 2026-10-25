@@ -6,6 +6,7 @@ import { Tabs, Tab } from '@alfalab/core-components/tabs';
 import { Typography } from '@alfalab/core-components/typography';
 import { Input } from '@alfalab/core-components/input';
 import { CompactCard } from './insightCard.jsx';
+import { ALLOW_INFERENCE } from './cabinetMode.js';
 
 const valid = s => s && !isNaN(new Date(s));
 const date = s => valid(s) ? new Date(s).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' }) : '';
@@ -13,8 +14,8 @@ const time = s => valid(s) ? new Date(s).toLocaleTimeString('ru-RU', { hour: '2-
 const Title = props => <Typography.Title font="system" {...props} />;
 const PAGE_SIZE = 8;
 
-const LIVE = { loading: 'Загружаем анализ…', none: 'Анализа ещё нет, показан пример', running: 'Идёт анализ новостей и аналитики Банка…',
-               error: 'Не удалось получить анализ, показан пример' };
+const LIVE = { loading: 'Загружаем анализ…', none: 'Анализа ещё нет', running: 'Идёт анализ новостей и аналитики Банка…',
+               error: 'Не удалось получить анализ' };
 function LiveBar({ live, run }) {
   if (live.state === 'off') return null;
   const errors = live.feed?.errors || [];
@@ -22,8 +23,9 @@ function LiveBar({ live, run }) {
     {live.state !== 'ready' && <Typography.Text view="primary-small" color="secondary">{LIVE[live.state]}</Typography.Text>}
     {live.state === 'ready' && errors.length > 0 && <Status color="orange" size={20}>Часть источников не обработана</Status>}
     {live.error && <Typography.Text view="primary-small" color="negative">{live.error}</Typography.Text>}
-    <Button size={32} view="secondary" loading={live.state === 'running'} disabled={live.state === 'loading'} onClick={run}>
+    {ALLOW_INFERENCE && <Button size={32} view="secondary" loading={live.state === 'running'} disabled={live.state === 'loading'} onClick={run}>
       {live.feed ? 'Обновить анализ' : 'Запустить анализ'}</Button>
+    }
   </div>;
 }
 

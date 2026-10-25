@@ -165,6 +165,29 @@ class InsightWriter:
             review = self._check(insight, inputs, evidence)
         return insight, review
 
+    async def awrite(self, company_id: str, role: str, decision: str, evidence: Evidence) -> tuple[Insight, Review]:
+        """The same reminders, revisions and checked verdict as write(), awaiting model calls."""
+        inputs = {'company_id': company_id, 'role': role, **role_context(role), 'decision': decision, 'evidence': evidence.render(),
+                  'rules': RULES}
+        insight = (await self.writer.ainvoke(inputs | {'feedback': 'нет'})).model_copy(update={'role': role})
+        if found := self._remind(insight, 0, evidence):
+            insight = (await self.writer.ainvoke(inputs | {'feedback': reminder_note(found)})).model_copy(update={'role': role})
+        review = await self._acheck(insight, inputs, evidence)
+        for n in range(1, self.revisions + 1):
+            if review.ok:
+                break
+            found = self._remind(insight, n, evidence)
+            feedback = '\n'.join(f'- {i}' for i in review.issues) + (f'\n\n{reminder_note(found)}' if found else '')
+            insight = (await self.writer.ainvoke(inputs | {'feedback': feedback})).model_copy(update={'role': role})
+            review = await self._acheck(insight, inputs, evidence)
+        return insight, review
+
+    async def _acheck(self, insight: Insight, inputs: dict, evidence: Evidence) -> Review:
+        verify_claim_evidence(insight, evidence.news, evidence.bank, origin=evidence.origin)
+        return await self.checker.ainvoke({'role': inputs['role'], 'role_title': inputs['role_title'], 'role_focus': inputs['role_focus'],
+                                         'rules': RULES, 'evidence': inputs['evidence'],
+                                         'insight': insight.model_dump_json(indent=1)})
+
     @staticmethod
     def _remind(insight: Insight, round_no: int, evidence: Evidence) -> list[str]:
         found = reminders(insight, evidence)

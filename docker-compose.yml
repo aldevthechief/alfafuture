@@ -21,6 +21,8 @@ services:
     build: .
     command: python -m uvicorn backend.app:app --host 0.0.0.0 --port 8000
     environment:
+      CABINET_MODE: "${CABINET_MODE:-server}"
+      API_PREPARE_ON_START: "0" # New analysis starts only after an explicit user action.
       ALFA_CACHE_REDIS_URL: redis://redis:6379/0
       CUDA_VISIBLE_DEVICES: "-1"
     ports:
@@ -35,6 +37,7 @@ services:
     build: .
     command: python -m uvicorn feedback_api.app:app --host 0.0.0.0 --port 8001
     environment:
+      CABINET_MODE: "${CABINET_MODE:-server}"
       ALFA_CACHE_REDIS_URL: redis://redis:6379/0
       FEEDBACK_LLM_CACHE_TTL: "${FEEDBACK_LLM_CACHE_TTL:-3600}"
       CUDA_VISIBLE_DEVICES: "-1"
@@ -50,6 +53,8 @@ services:
     build:
       context: .
       dockerfile: frontend/Dockerfile
+      args:
+        CABINET_MODE: "${CABINET_MODE:-server}"
     ports:
       - "5173:80"
     depends_on:

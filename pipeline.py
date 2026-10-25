@@ -20,7 +20,7 @@ lexical = the facet search. --candidates limits distinct events in v2 / hybrid m
 CLI/API only run the judge engine. The legacy run_loop() and its modules remain for direct development use;
 shared computations and audit are still used by judge. PDF preparation runs before the judge graph.
 """
-import argparse, contextvars, hashlib, json, math, operator, sys
+import argparse, asyncio, contextvars, hashlib, inspect, json, math, operator, sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Annotated, TYPE_CHECKING, TypedDict
@@ -32,6 +32,7 @@ from stage2_company_facts.profile.context import CONTEXT_CATEGORY
 
 from langchain_core.callbacks import UsageMetadataCallbackHandler
 from langchain_core.language_models import BaseChatModel
+from langchain_core.runnables import RunnableLambda
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
 
@@ -84,6 +85,25 @@ def personalization_context(value: Personalization | None) -> str:
                             value.render(), body_limit=16000)
 
 
+async def _await_component(component, method, *args, **kwargs):
+    """Use native async components; retain compatibility with existing sync-only injected components."""
+    asynchronous = getattr(component, 'a' + method, None)
+    if inspect.iscoroutinefunction(asynchronous):
+        return await asynchronous(*args, **kwargs)
+    return await asyncio.to_thread(getattr(component, method), *args, **kwargs)
+
+
+def _run_async(factory):
+    """Run one async graph while preserving the existing synchronous entry points and context."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(factory())
+    context = contextvars.copy_context()
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        return executor.submit(context.run, lambda: asyncio.run(factory())).result()
+
+
 class InsightPipeline:
     def __init__(self, cheap: BaseChatModel, agent: BaseChatModel, consequences: ConsequenceExtractor | None = None,
                  bank: BankAnalytics | None = None, related: RelatedNews | None = None):
@@ -106,7 +126,8 @@ class InsightPipeline:
         self._params = {'company_id': company_id, 'role': role, 'n_judge': n_judge,
                         'personalization': pers, 'user_context': personalization_context(pers)}
         rows = self._prepare(company_id, role, n_candidates, retrieval)
-        state = self.news_graph().invoke({'rows': rows}, config={'max_concurrency': max(1, workers)})
+        graph, config = self.news_graph(), {'max_concurrency': max(1, workers)}
+        state = _run_async(lambda: graph.ainvoke({'rows': rows}, config=config))
         return state['news_results']
 
     def news_graph(self):
@@ -114,9 +135,9 @@ class InsightPipeline:
         assess fans out per news, rank joins, judge+write fans out per top news, collect joins."""
         if getattr(self, '_graph', None) is None:
             g = StateGraph(_NewsState)
-            g.add_node('assess_one', self._assess_node)
+            g.add_node('assess_one', RunnableLambda(self._assess_node, afunc=self._aassess_node))
             g.add_node('rank', self._rank_node)
-            g.add_node('judge_one', self._judge_node)
+            g.add_node('judge_one', RunnableLambda(self._judge_node, afunc=self._ajudge_node))
             g.add_node('collect', self._collect_node)
             g.add_conditional_edges(START, self._fan_assess, ['assess_one', 'rank'])
             g.add_edge('assess_one', 'rank')
@@ -172,18 +193,24 @@ class InsightPipeline:
         return {'stage': stage, 'schema': error.schema, 'attempts': error.attempts, 'message': str(error)}
 
     def _assess_node(self, item: dict) -> dict:
+        return item['ctx'].run(lambda: _run_async(lambda: self._assess_body(item)))
+
+    async def _aassess_node(self, item: dict) -> dict:
+        return await asyncio.get_running_loop().create_task(self._assess_body(item), context=item['ctx'])
+
+    async def _assess_body(self, item: dict) -> dict:
         """Stage 4 for one news: (idx, priority, news, stage4) — priority None marks a model error."""
         idx, news = item['idx'], item['news']
         p = self._params
 
-        def body(_):
+        async def body():
             plausibility = self.related.event_plausibility(news['id'])
             stage = 'relevance'
             try:
-                relevance = self.relevance.score(news, '\n'.join(p['key_facts']), p['role'])
+                relevance = await _await_component(self.relevance, 'score', news, '\n'.join(p['key_facts']), p['role'])
                 stage = 'consequences'
                 stage4 = {'matched_fragments': news.get('matched_fragments', []), 'relevance': relevance.model_dump(),
-                          'consequences': self.consequences.extract(news), 'plausibility': plausibility}
+                          'consequences': await _await_component(self.consequences, 'extract', news), 'plausibility': plausibility}
                 priority = relevance.score * (0.5 if plausibility is None else plausibility)
                 if p['personalization'] is not None:
                     stage4['personalization_factor'] = p['personalization'].factor(news, relevance.channel)
@@ -195,7 +222,7 @@ class InsightPipeline:
                                     else {'stage': stage, 'type': type(error).__name__, 'message': str(error)[:500]})
             return priority, news, stage4
 
-        priority, news, out = item['ctx'].run(body, None)
+        priority, news, out = await body()
         return {'assessed': [(idx, priority, news, out)]}
 
     def _rank_node(self, state: _NewsState) -> dict:
@@ -215,13 +242,20 @@ class InsightPipeline:
         result, news = item['ctx'].run(self._judge_body, item)
         return {'judge_rows': [(item['pos'], self._record(news, **result))]}
 
+    async def _ajudge_node(self, item: dict) -> dict:
+        result, news = await asyncio.get_running_loop().create_task(self._ajudge_body(item), context=item['ctx'])
+        return {'judge_rows': [(item['pos'], self._record(news, **result))]}
+
     def _judge_body(self, item: dict) -> tuple[dict, dict]:
+        return _run_async(lambda: self._ajudge_body(item))
+
+    async def _ajudge_body(self, item: dict) -> tuple[dict, dict]:
         p = self._params
         company_id, role, facts, all_facts = p['company_id'], p['role'], p['facts'], p['all_facts']
         news, stage4 = item['news'], item['stage4']
         result, stage = {'stage4': stage4}, 'judge'
         try:
-            decision = self.judge.decide(news['id'], company_id, facts, role, stage4)  # stage 5
+            decision = await _await_component(self.judge, 'decide', news['id'], company_id, facts, role, stage4)  # stage 5
             result['decision'] = decision.model_dump()
             if decision.bank_evidence:
                 result['judge_bank'] = decision.bank_evidence
@@ -235,11 +269,11 @@ class InsightPipeline:
                 related = [self.related.get(i) for i in decision.related_news_ids[:3] if i in self.related.row_of]
                 # Reuse the exact sources read by the judge (hits, neighbours, compared tables).
                 # A fresh mechanism query is only a fallback when the judge read no bank material.
-                bank = decision.bank_evidence or (self.bank.search(decision.mechanism) if self.bank else [])
+                bank = decision.bank_evidence or ((await asyncio.to_thread(self.bank.search, decision.mechanism)) if self.bank else [])
                 bank = list({b.get('id') or f'bank:{b["report"]}:{b["page"]}': b
                              for b in [*bank, *decision.calculation_bank]}.values())
                 stage = 'writer'
-                insight, review = self.writer.write(company_id, role, decision.model_dump_json(),
+                insight, review = await _await_component(self.writer, 'write', company_id, role, decision.model_dump_json(),
                                                     Evidence(news=[news, *related], facts=all_facts, bank=bank,
                                                              calculations=calculations,
                                                              full_bank_ids={b['id'] for b in [*decision.bank_evidence,
@@ -488,7 +522,7 @@ if __name__ == '__main__':
     ap.add_argument('--user-id', default=None, help='apply this user\'s feedback for this company and role')
     ap.add_argument('--candidates', type=int, default=30)
     ap.add_argument('--judge', type=int, default=5)
-    ap.add_argument('--workers', type=int, default=8, help='judge engine: news processed in parallel (LLM calls in flight)')
+    ap.add_argument('--workers', type=int, default=16, help='judge engine: news processed in parallel (LLM calls in flight)')
     ap.add_argument('--engine', choices=['judge'], default='judge', help='judge is the only public engine')
     ap.add_argument('--retrieval', choices=['v2', 'v3', 'hybrid', 'lexical'], default='v2',
                     help='v2 = standard generators + generator factory (e5 + qwen + BM25); v3 = v2 + news-first channel generators; '

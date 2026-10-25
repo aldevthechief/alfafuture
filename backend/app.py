@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import ValidationError
 
 from backend.jobs import QueueFull
+from backend.cabinet import cached_job, catalog as cabinet_catalog, search_companies
 from backend.insight_previews import detail, metadata, preview_feed
 from backend.schemas import AnalysisRequest, AskRequest, BatchRequest, PreparationRequest, SearchRequest, JobResponse
 from backend.service import Service
@@ -24,9 +25,10 @@ from stage5_insight_detection.bank_analytics.ocr import PDF_DIR
 def create_app(service=None, cors_origins=None):
     @asynccontextmanager
     async def lifespan(app):
-        app.state.service=service or Service(checkpointing=True)
+        app.state.service=service or Service(checkpointing=True, agent_workers=1)
         # Warm/import each original report independently in the background; uploaded PDFs never touch that folder.
-        if service is None:
+        if (service is None and os.environ.get('CABINET_MODE', 'full') != 'server'
+                and os.environ.get('API_PREPARE_ON_START', '1') == '1'):
             for pdf in sorted(PDF_DIR.glob('*.pdf')):
                 try: app.state.service.prepare(pdf,PreparationOptions(),PDF_DIR)
                 except QueueFull: break
@@ -52,11 +54,15 @@ def create_app(service=None, cors_origins=None):
         return request.model_copy(update={'user_id':user_id})
 
     def svc(): return app.state.service
+    def require_inference():
+        if os.environ.get('CABINET_MODE', 'full') == 'server':
+            raise HTTPException(403, 'This server only serves prepared demo accounts')
     def submit(work):
         try: return work()
         except QueueFull as exc: raise HTTPException(429,str(exc)) from exc
 
     def prepare_paths(paths,options,seed=None):
+        require_inference()
         jobs=[]
         for i,path in enumerate(paths):
             try: jobs.append(svc().prepare(path,options,seed))
@@ -73,11 +79,13 @@ def create_app(service=None, cors_origins=None):
 
     @app.post('/v1/analyses',status_code=202,response_model=JobResponse,tags=['agents'],summary='Run one company/role analysis with all CLI flags')
     def analyze(request: AnalysisRequest, x_user_id: User = None):
+        require_inference()
         request = with_user(request, x_user_id)
         return submit(lambda:svc().analyze(request))
 
     @app.post('/v1/analyses/batch',status_code=202,tags=['agents'],summary='Queue independent companies/roles/scenarios in parallel')
     def batch(request: BatchRequest, x_user_id: User = None):
+        require_inference()
         # Every item has its own durable status; a queue limit returns accepted jobs explicitly.
         jobs=[]
         items = [with_user(item, x_user_id) for item in request.items]
@@ -103,8 +111,10 @@ def create_app(service=None, cors_origins=None):
                 raise HTTPException(404, 'Unknown job')
             return project(job)
         try:
+            if job_id.startswith('demo-'):
+                return project(cached_job(job_id))
             return svc().agents.get(job_id, project=owned)
-        except KeyError:
+        except (KeyError, FileNotFoundError):
             raise HTTPException(404, 'Unknown insight')
 
     @app.get('/v1/jobs/{job_id}/insights',tags=['jobs'])
@@ -126,6 +136,19 @@ def create_app(service=None, cors_origins=None):
     def reports():
         with svc().catalog.lock: return dict(active=dict(svc().catalog.current))
 
+    @app.get('/v1/cabinet/accounts',tags=['companies'])
+    def cabinet_accounts():
+        return cabinet_catalog()
+
+    @app.get('/v1/cabinet/companies',tags=['companies'])
+    def cabinet_companies(q: str = ''):
+        if len(q) > 120:
+            raise HTTPException(422, 'Search query is too long')
+        try:
+            return dict(items=search_companies(q))
+        except FileNotFoundError:
+            raise HTTPException(503, 'Company case tables are not installed')
+
     @app.post('/v1/reports/prepare',status_code=202,tags=['reports'],summary='Prepare existing reports in parallel with per-report caches and budgets')
     def prepare(request: PreparationRequest):
         options=PreparationOptions(**request.model_dump())
@@ -134,6 +157,7 @@ def create_app(service=None, cors_origins=None):
     @app.post('/v1/reports/upload',status_code=202,tags=['reports'],summary='Upload PDFs; prepare and publish in background without interrupting agents')
     async def upload(files: Annotated[list[UploadFile],File(description='One or several PDFs, maximum 50 MiB each')],
                      options: Annotated[str,Form(description='JSON PreparationRequest: charts, tables, digests and per-report budgets')]='{}'):
+        require_inference()
         try: prep=PreparationRequest.model_validate_json(options)
         except ValidationError as exc: raise HTTPException(422,jsonable_encoder(exc.errors(include_context=False))) from exc
         if len(files)>32: raise HTTPException(413,'At most 32 reports per upload')
@@ -156,6 +180,7 @@ def create_app(service=None, cors_origins=None):
 
     @app.post('/v1/search/news',tags=['search'])
     def news_search(request: SearchRequest):
+        require_inference()
         from common.news_snapshot import news_snapshot
         from stage5_insight_detection.news_enrichment.related_news import RelatedNews
         with news_snapshot():
@@ -164,12 +189,14 @@ def create_app(service=None, cors_origins=None):
 
     @app.post('/v1/search/bank',tags=['search'])
     def bank_search(request: SearchRequest):
+        require_inference()
         version,library,bank=svc().catalog.snapshot(svc().models_factory())
         return dict(version=version,items=bank.search(request.query,request.k))
 
     @app.post('/v1/insights/ask', response_class=StreamingResponse, tags=['agents'],
               summary='Вопрос по готовому инсайту: ответ стримится токен за токеном')
     def ask_question(body: AskRequest):
+        require_inference()
         from backend.service import Service  # noqa: F401 - the request reaches the same service state
         def gen():
             try:

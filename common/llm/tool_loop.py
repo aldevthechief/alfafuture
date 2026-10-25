@@ -4,7 +4,7 @@ judge (stage 5).
 
     think ──tool calls──> act ──> think ... ──final tool / step limit──> END
 """
-import json
+import asyncio, json
 from collections.abc import Callable
 from types import UnionType
 from typing import Annotated, TypedDict, Union, get_args, get_origin
@@ -68,21 +68,32 @@ class ToolLoop:
         self.model = model.bind_tools([*tools, final])
         self.system_prompt, self.max_steps, self.nudge = system_prompt, max_steps, nudge
         self.observe = observe or (lambda name, args, text: text)
-        self.graph = self._build()
+        self.graph = self._build(self._think, self._act)
+        self.agraph = self._build(self._athink, self._aact)  # the same loop on the event loop: model calls awaited
 
     def run(self, task: str) -> BaseModel | None:
         """Returns the validated final answer, or None if the step limit was hit first."""
-        state = self.graph.invoke({'messages': [HumanMessage(task)], 'steps': 0},
-                                  {'recursion_limit': 2 * self.max_steps + 5, **trace_config(f'tool_loop:{self.final_name}')})
+        state = self.graph.invoke({'messages': [HumanMessage(task)], 'steps': 0}, self._config())
+        return self._result(state)
+
+    async def arun(self, task: str) -> BaseModel | None:
+        """run() without a thread: the model call is awaited, the (sync, local) tools go to a worker thread."""
+        state = await self.agraph.ainvoke({'messages': [HumanMessage(task)], 'steps': 0}, self._config())
+        return self._result(state)
+
+    def _config(self) -> dict:
+        return {'recursion_limit': 2 * self.max_steps + 5, **trace_config(f'tool_loop:{self.final_name}')}
+
+    def _result(self, state: LoopState) -> BaseModel | None:
         call = self._final_call(state['messages'][-1])
         if getattr(state['messages'][-1], 'response_metadata', {}).get('finish_reason') in ('length', 'max_tokens'):
             return None
         return self.final.model_validate(json_args(self.final, call['args'])) if call else None
 
-    def _build(self):
+    def _build(self, think, act):
         g = StateGraph(LoopState)
-        g.add_node('think', self._think)
-        g.add_node('act', self._act)
+        g.add_node('think', think)
+        g.add_node('act', act)
         g.add_edge(START, 'think')
         g.add_conditional_edges('think', self._route, ['act', END])
         g.add_edge('act', 'think')
@@ -91,6 +102,16 @@ class ToolLoop:
     def _think(self, state: LoopState) -> dict:
         reply = self.model.invoke([SystemMessage(self.system_prompt), *state['messages']])
         return {'messages': [reply], 'steps': state['steps'] + 1}
+
+    async def _athink(self, state: LoopState) -> dict:
+        reply = await self.model.ainvoke([SystemMessage(self.system_prompt), *state['messages']])
+        return {'messages': [reply], 'steps': state['steps'] + 1}
+
+    async def _aact(self, state: LoopState) -> dict:
+        calls = state['messages'][-1].tool_calls
+        if not calls:
+            return {'messages': [HumanMessage(self.nudge)]}
+        return {'messages': [ToolMessage(await asyncio.to_thread(self._execute, c), tool_call_id=c['id']) for c in calls]}
 
     def _route(self, state: LoopState) -> str:
         done = self._final_call(state['messages'][-1]) or state['steps'] >= self.max_steps

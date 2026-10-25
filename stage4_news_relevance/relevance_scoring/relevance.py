@@ -28,4 +28,11 @@ class RelevanceScorer:
         self.chain = PROMPTS.chat('relevance') | structured(model or ChatModels().cheap(max_tokens=300), Relevance)
 
     def score(self, news: dict, facts_text: str, role: str) -> Relevance:
-        return self.chain.invoke({'role': role, 'facts': facts_text, 'title': news['title'], 'text': article_context(news)})
+        return self.chain.invoke(self._inputs(news, facts_text, role))
+
+    async def ascore(self, news: dict, facts_text: str, role: str) -> Relevance:
+        return await self.chain.ainvoke(self._inputs(news, facts_text, role))
+
+    @staticmethod
+    def _inputs(news: dict, facts_text: str, role: str) -> dict:
+        return {'role': role, 'facts': facts_text, 'title': news['title'], 'text': article_context(news)}

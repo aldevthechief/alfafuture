@@ -11,7 +11,7 @@ class AnalysisRequest(BaseModel):
     role: str='cfo'
     candidates: int=Field(30,ge=1,le=500)
     judge: int=Field(5,ge=1,le=100)
-    workers: int=Field(4,ge=1,le=16)
+    workers: int=Field(16,ge=1,le=16)
     engine: Literal['judge']='judge'
     retrieval: Literal['v2','v3','hybrid','lexical']='v2'
     source: Literal['news','analytics','both']='both'

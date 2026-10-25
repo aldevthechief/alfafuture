@@ -67,19 +67,42 @@ class ConsequenceExtractor:
 
     def extract(self, news: dict) -> dict:
         """news: a row of news.parquet as dict. Returns NewsConsequences as a plain dict (that is what the cache stores)."""
-        signature = extraction_version()
-        key = hashlib.sha256((signature + article_fingerprint(news)).encode()).hexdigest()
-        result = copy.deepcopy(self.cache.get_or_compute(key, lambda: self._extract(news)))
+        key = self._key(news)
+        return self._bind(self.cache.get_or_compute(key, lambda: self._extract(news)), news)
+
+    async def aextract(self, news: dict) -> dict:
+        """extract() with the model calls awaited; the cache is checked first, a computed value is stored the same way."""
+        key = self._key(news)
+        async def compute():
+            return self._merge(news, [(start, text, (await self.chain.ainvoke({'title': news['title'], 'text': text})).model_dump())
+                                      for start, end, text in self._chunks(news)])
+        value = await self.cache.aget_or_compute(key, compute)
+        return self._bind(value, news)
+
+    @staticmethod
+    def _key(news: dict) -> str:
+        return hashlib.sha256((extraction_version() + article_fingerprint(news)).encode()).hexdigest()
+
+    @staticmethod
+    def _bind(value: dict, news: dict) -> dict:
+        result = copy.deepcopy(value)
         # Content cache survives ID migrations; source identities always come from this input row.
         for fact in result['facts']:
             fact['evidence'].update(source=f"news:{news['id']}", url=news.get('url') or '')
         return result
 
+    @staticmethod
+    def _chunks(news: dict):
+        return split_into_chunks(news.get('text') or '', chunk_size=3000, overlap=250) or [(0, 0, '')]
+
     def _extract(self, news: dict) -> dict:
-        chunks = split_into_chunks(news.get('text') or '', chunk_size=3000, overlap=250)
+        return self._merge(news, [(start, text, self.chain.invoke({'title': news['title'], 'text': text}).model_dump())
+                                  for start, end, text in self._chunks(news)])
+
+    @staticmethod
+    def _merge(news: dict, answers: list[tuple]) -> dict:
         outputs = []
-        for start, end, text in chunks or [(0, 0, '')]:
-            value = self.chain.invoke({'title': news['title'], 'text': text}).model_dump()
+        for start, text, value in answers:
             facts, rejected = [], []
             for fact in value['facts']:
                 quote = fact['quote']

@@ -60,6 +60,13 @@ class ProxyChatOpenAI(ChatOpenAI):
         with propagate_attributes(session_id=RUN_ID, tags=[RUN_ID.rsplit('-', 2)[0]]):
             return super().generate(*args, **kwargs)
 
+    async def agenerate(self, *args, **kwargs):
+        if not LANGFUSE:
+            return await super().agenerate(*args, **kwargs)
+        from langfuse import propagate_attributes
+        with propagate_attributes(session_id=RUN_ID, tags=[RUN_ID.rsplit('-', 2)[0]]):
+            return await super().agenerate(*args, **kwargs)
+
     def _convert_chunk_to_generation_chunk(self, chunk, default_chunk_class, base_generation_info):
         gen = super()._convert_chunk_to_generation_chunk(chunk, default_chunk_class, base_generation_info)
         cost = (chunk.get('usage') or {}).get('cost')
@@ -132,7 +139,26 @@ def structured(model: BaseChatModel, schema: type[BaseModel], *, attempts: int =
                     'Верни полный ответ через указанный инструмент, соблюдая типы и обязательные поля.')]
         raise StructuredOutputError(schema, attempts)
 
-    return RunnableLambda(invoke)
+    async def ainvoke(value, config: RunnableConfig):
+        request = value
+        for attempt in range(1, attempts + 1):
+            try:
+                answer = await chain.ainvoke(request, config=config)
+                result = answer['parsed'] if answer['parsed'] is not None else from_text(answer['raw'], schema)
+                cut = answer['raw'].response_metadata.get('finish_reason') in ('length', 'max_tokens')
+                if isinstance(result, schema) and not cut:
+                    return result
+            except (OutputParserException, ValidationError):
+                pass
+            if attempt < attempts:
+                messages = value.to_messages() if isinstance(value, PromptValue) else convert_to_messages(
+                    [HumanMessage(value)] if isinstance(value, str) else value)
+                request = [*messages, HumanMessage(
+                    f'Попытка {attempt + 1}: предыдущий ответ не соответствует схеме {schema.__name__}. '
+                    'Верни полный ответ через указанный инструмент, соблюдая типы и обязательные поля.')]
+        raise StructuredOutputError(schema, attempts)
+
+    return RunnableLambda(invoke, afunc=ainvoke)
 
 
 def from_text(message, schema: type[BaseModel]) -> BaseModel | None:

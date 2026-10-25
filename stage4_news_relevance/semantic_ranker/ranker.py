@@ -13,7 +13,8 @@ DEFAULT_MODEL = 'BAAI/bge-reranker-v2-m3'
 @lru_cache(2)
 def _cross_encoder(name: str, device: str):
     from sentence_transformers import CrossEncoder
-    return CrossEncoder(name, device=device, max_length=512)
+    from common.model_load import load_once
+    return load_once(('cross-encoder', name, device), lambda: CrossEncoder(name, device=device, max_length=512))
 
 
 class SemanticRanker:

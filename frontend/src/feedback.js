@@ -1,8 +1,9 @@
 import { ApiError, requestJson, USER_ID } from './api.js';
+import { ALLOW_INFERENCE } from './cabinetMode.js';
 
 const ENV = import.meta.env || {};
-const BASE = (ENV.VITE_FEEDBACK_API ?? 'http://127.0.0.1:8001').replace(/\/$/, '');
-export const FEEDBACK_ENABLED = BASE !== 'off' && BASE !== '';
+const BASE = (ENV.VITE_FEEDBACK_API ?? (ENV.DEV ? '/feedback' : 'http://127.0.0.1:8001')).replace(/\/$/, '');
+export const FEEDBACK_ENABLED = ALLOW_INFERENCE && BASE !== 'off' && BASE !== '';
 const call = (path, body) => requestJson(BASE, path, body === undefined ? {} : { method:'POST', body:JSON.stringify(body) });
 const registrations = new Map();
 const keyOf = (company, i) => JSON.stringify([USER_ID, company, i.role, i.job_id, i.id]);

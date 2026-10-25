@@ -6,6 +6,7 @@ import { Spinner } from '@alfalab/core-components/spinner';
 import { Typography } from '@alfalab/core-components/typography';
 import { Tag } from '@alfalab/core-components/tag';
 import { ApiError } from './api.js';
+import { ALLOW_INFERENCE } from './cabinetMode.js';
 import { answerSources, askQuestion, discussionHistory, FEEDBACK_ENABLED, sendReaction } from './feedback.js';
 
 const REASONS = [['Не про нас', 'not_relevant'], ['Уже знали', 'already_known'],
@@ -130,7 +131,8 @@ export function InsightDiscussion({ company, insight, variant, feedbackTarget })
   </>;
   return <section className={inWindow ? 'side-card chat2 discussion' : 'layer discussion'}>
     <Typography.Text view="caps" weight="bold" tag="div">{inWindow ? 'Спросить AI об этом событии' : 'Обсуждение инсайта'}</Typography.Text>
-    {!available && <p>Вопросы и реакции доступны для результатов анализа. Запустите анализ в ленте.</p>}
+    {!available && <p>{ALLOW_INFERENCE ? 'Вопросы и реакции доступны для результатов анализа. Запустите анализ в ленте.'
+      : 'В этой версии доступны готовые материалы. Обсуждение с AI — в расширенной версии.'}</p>}
     {loading && <p><Spinner preset={16} visible /> Загружаем историю…</p>}
     {feedbackTarget ? createPortal(reactions, feedbackTarget) : reactions}
     <div className={inWindow ? 'chat2-body' : undefined} ref={body}>

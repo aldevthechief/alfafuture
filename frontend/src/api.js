@@ -1,7 +1,8 @@
 // Backend client (docs/API.md): POST /v1/analyses → poll GET /v1/jobs/{id}; the job result is mapped to the feed.json shape
 // the widgets already read. VITE_API_URL sets the base, VITE_API_URL=off keeps the demo feed.json only.
+import { ALLOW_INFERENCE } from './cabinetMode.js';
 const ENV = import.meta.env || {};
-const BASE = (ENV.VITE_API_URL ?? 'http://127.0.0.1:8000').replace(/\/$/, '');
+const BASE = (ENV.VITE_API_URL ?? (ENV.DEV ? '.' : 'http://127.0.0.1:8000')).replace(/\/$/, '');
 export const USER_ID = ENV.VITE_USER_ID || 'demo-user';
 export const API_ENABLED = BASE !== 'off' && BASE !== '';
 // extra AnalysisRequest fields (JSON), e.g. VITE_ANALYSIS='{"engine":"judge","analytics_cache_only":true}'
@@ -34,8 +35,13 @@ export async function latestJobs(company, role) {
     running: personal.find(j => !DONE.includes(j.status)) };
 }
 
-export const startAnalysis = (company, role) =>
-  call('/v1/analyses', { method: 'POST', body: JSON.stringify({ ...ANALYSIS, company_id: company, role, user_id: USER_ID }) });
+export const startAnalysis = (company, role, options = {}) => {
+  if (!ALLOW_INFERENCE) return Promise.reject(new Error('В этой версии доступны только готовые кабинеты.'));
+  return call('/v1/analyses', { method: 'POST', body: JSON.stringify({ ...ANALYSIS, ...options, company_id: company, role, user_id: USER_ID }) });
+};
+
+export const cabinetAccounts = () => call('/v1/cabinet/accounts');
+export const searchCompanies = query => call(`/v1/cabinet/companies?q=${encodeURIComponent(query)}`);
 
 export async function waitJob(id, cancelled, every = 3000) {
   for (;;) {

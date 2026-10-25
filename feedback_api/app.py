@@ -59,6 +59,10 @@ def create_app(store: Store | None = None, analyzer=None, api_token: str | None 
 
     User = Annotated[str, Depends(user)]
 
+    def require_inference():
+        if os.environ.get('CABINET_MODE', 'full') == 'server':
+            raise HTTPException(403, 'This server only serves prepared demo accounts')
+
     @app.exception_handler(NotFound)
     async def not_found(request, exc):
         return JSONResponse(status_code=404, content={'detail': 'Not found'})
@@ -114,12 +118,14 @@ def create_app(store: Store | None = None, analyzer=None, api_token: str | None 
     def add_feedback(insight_id: UUID, body: FeedbackInput, user_id: User):
         """A reaction (like / dislike / emoji / useful / not_relevant / already_known) is answered by rules, without a model;
         a comment is answered by the model grounded in the insight's evidence."""
+        require_inference()
         record = app.state.store.add(user_id, str(insight_id), body)
         return analyze(user_id, record)
 
     @app.post('/v1/insights/{insight_id}/ask', response_model=FeedbackRecord, status_code=201)
     def ask(insight_id: UUID, body: Question, user_id: User):
         """A question to the insight: the answer cites news:/fact:/bank: ids of the insight or explicit lookups."""
+        require_inference()
         record = app.state.store.add(user_id, str(insight_id), FeedbackInput(
             kind=Kind.question, comment=body.question, request_id=body.request_id,
             scope=Scope.future if body.remember else Scope.insight))

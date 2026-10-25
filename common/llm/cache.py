@@ -2,6 +2,7 @@
 (the docker compose run shares the LLM cache and the named caches across containers; the Redis volume
 outlives restarts). `JsonlCache`: append-only key -> JSON value, reused by every company. `FileLLMCache`:
 LangChain cache for every model call (prompt + model + params), plugged into all `ChatModels` models."""
+import asyncio
 import hashlib
 import json
 import os
@@ -55,7 +56,7 @@ class JsonlCache:
 
     def get_or_compute(self, key: str, compute: Callable[[], Any]) -> Any:
         with _CACHE_LOCK:
-            lock = _KEY_LOCKS.setdefault((str(self.path.resolve()), key), threading.RLock())
+            lock = _KEY_LOCKS.setdefault((str(self.path.resolve()), key), threading.Lock())
         with lock:
             with _CACHE_LOCK:
                 self._values = None
@@ -65,6 +66,27 @@ class JsonlCache:
             value = compute()
             self.put(key, value)
             return value
+
+    async def aget_or_compute(self, key: str, compute):
+        """Share sync/async cache misses across runs without a thread waiting on the model."""
+        with _CACHE_LOCK:
+            lock = _KEY_LOCKS.setdefault((str(self.path.resolve()), key), threading.Lock())
+        while not lock.acquire(blocking=False):
+            await asyncio.sleep(0.01)
+        try:
+            def lookup():
+                with _CACHE_LOCK:
+                    self._values = None
+                    values = self._load()
+                    return key in values, values.get(key)
+            found, value = await asyncio.to_thread(lookup)
+            if found:
+                return value
+            value = await compute()
+            await asyncio.to_thread(self.put, key, value)
+            return value
+        finally:
+            lock.release()
 
     def _load(self) -> dict[str, Any]:
         if self._values is not None:
@@ -78,6 +100,38 @@ class JsonlCache:
         lines = self.path.read_text(encoding='utf-8').splitlines() if self.path.exists() else []
         self._values = {d['key']: d['value'] for d in map(json.loads, filter(None, lines))}
         return self._values
+
+
+def stable_prompt(prompt: str) -> str:
+    """Ignore replay-only metadata of earlier AI turns, keeping their content and tool calls intact."""
+    try:
+        messages = json.loads(prompt)
+    except ValueError:
+        return prompt
+    changed = False
+    for message in messages if isinstance(messages, list) else []:
+        if not isinstance(message, dict):
+            continue
+        identifier = message.get('id')
+        if not isinstance(identifier, list) or not identifier or not str(identifier[-1]).startswith('AIMessage'):
+            continue
+        kwargs = message.get('kwargs', {})
+        for key in ('usage_metadata', 'response_metadata', 'id'):
+            if key in kwargs:
+                del kwargs[key]
+                changed = True
+    return json.dumps(messages) if changed else prompt
+
+
+def lookup_prompt(get, prompt: str, llm_string: str):
+    stable = stable_prompt(prompt)
+    # Existing entries still work for their original prompt; no destructive cache migration.
+    for candidate in dict.fromkeys((stable, prompt)):
+        value = get(FileLLMCache._key(candidate, llm_string))
+        gens = loads(value, allowed_objects='all') if value is not None else None
+        if gens and FileLLMCache.complete(gens):
+            return gens
+    return None
 
 
 class FileLLMCache(BaseCache):
@@ -102,13 +156,11 @@ class FileLLMCache(BaseCache):
         return bool(gens) and all(map(ok, gens))
 
     def lookup(self, prompt: str, llm_string: str) -> Sequence[Generation] | None:
-        v = self.store.get(self._key(prompt, llm_string))
-        gens = loads(v, allowed_objects='all') if v is not None else None  # our own file, trusted
-        return gens if gens and self.complete(gens) else None  # also skips cut answers cached before this check
+        return lookup_prompt(self.store.get, prompt, llm_string)
 
     def update(self, prompt: str, llm_string: str, return_val: Sequence[Generation]) -> None:
         if self.complete(return_val):
-            self.store.put(self._key(prompt, llm_string), dumps(list(return_val)))
+            self.store.put(self._key(stable_prompt(prompt), llm_string), dumps(list(return_val)))
 
     def clear(self, **kwargs: Any) -> None:
         self.store.path.unlink(missing_ok=True)
@@ -125,13 +177,11 @@ def _redis_llm_cache() -> BaseCache | None:
         """Same request -> same answer from Redis, no API call; the volume keeps them across restarts."""
 
         def lookup(self, prompt: str, llm_string: str) -> Sequence[Generation] | None:
-            v = client.hget(key, self_key(prompt, llm_string))
-            gens = loads(v, allowed_objects='all') if v is not None else None
-            return gens if gens and FileLLMCache.complete(gens) else None
+            return lookup_prompt(lambda field: client.hget(key, field), prompt, llm_string)
 
         def update(self, prompt: str, llm_string: str, return_val: Sequence[Generation]) -> None:
             if FileLLMCache.complete(return_val):
-                client.hset(key, self_key(prompt, llm_string), dumps(list(return_val)))
+                client.hset(key, self_key(stable_prompt(prompt), llm_string), dumps(list(return_val)))
 
         def clear(self, **kwargs: Any) -> None:
             client.delete(key)

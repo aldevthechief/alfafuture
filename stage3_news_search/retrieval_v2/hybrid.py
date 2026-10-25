@@ -30,15 +30,10 @@ def text_hash(text: str) -> str:
 
 
 def _encoder(slug: str):
-    with _cache_lock('encoder', slug):
-        return _cached_encoder(slug)
-
-
-@lru_cache(None)
-def _cached_encoder(slug: str):
+    """The one shared instance of a v2 encoder: common/encoders.py keeps one copy per model and serializes loading."""
     from common.encoders import load_encoder
     name, _, pad = MODELS[slug]
-    return load_encoder(name, tokenizer_kwargs={'padding_side':pad} if pad else None)
+    return load_encoder(name, tokenizer_kwargs={'padding_side': pad} if pad else None)
 
 
 def encode(slug: str, texts: list[str], batch_size: int = 16) -> np.ndarray:

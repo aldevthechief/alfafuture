@@ -113,6 +113,28 @@ class InsightJudge:
 
     def decide(self, news_id: int, company_id: str, facts: list[dict], role: str, stage4: dict | None = None,
                key_facts: int = 25) -> InsightDecision:
+        loop, tools, task = self._setup(news_id, company_id, facts, role, stage4, key_facts)
+        for attempt in range(2):
+            try:
+                if (decision := self._done(loop.run(self._task(task, attempt)), tools)) is not None:
+                    return decision
+            except (ValidationError, OutputParserException):
+                pass
+        raise StructuredOutputError(InsightDecision, 2)
+
+    async def adecide(self, news_id: int, company_id: str, facts: list[dict], role: str, stage4: dict | None = None,
+                      key_facts: int = 25) -> InsightDecision:
+        """decide() on the event loop: the loop's model calls are awaited (no thread waits on the LLM)."""
+        loop, tools, task = self._setup(news_id, company_id, facts, role, stage4, key_facts)
+        for attempt in range(2):
+            try:
+                if (decision := self._done(await loop.arun(self._task(task, attempt)), tools)) is not None:
+                    return decision
+            except (ValidationError, OutputParserException):
+                pass
+        raise StructuredOutputError(InsightDecision, 2)
+
+    def _setup(self, news_id, company_id, facts, role, stage4, key_facts):
         news = dict(self.related.get(news_id))
         news['matched_fragments'] = (stage4 or {}).get('matched_fragments', [])
         tools = JudgeTools(news_id, facts, self.related, self.bank, news, company_id)
@@ -122,15 +144,17 @@ class InsightJudge:
         task = PROMPTS.render('judge_task', role=role, company_id=company_id, facts='\n'.join(top_facts), news_id=news_id, date=news['date'], source=news['source'], title=news['title'],
                               text=article_context(news), stage4=json.dumps(stage4 or {}, ensure_ascii=False, default=str),
                               plausibility=self.related.event_plausibility(news_id))
-        for attempt in range(2):
-            try:
-                decision = loop.run(task if attempt == 0 else task + '\nПредыдущая попытка не дала корректного decide. '
-                                    'Заверши ответ вызовом decide со всеми обязательными полями.')
-                if decision is not None:
-                    decision.calculation_facts = list(tools.calculations.facts.values())
-                    decision.calculation_bank = list(tools.calculations.bank_sources.values())
-                    decision.bank_evidence = list(tools.bank_tools.evidence.values())
-                    return decision
-            except (ValidationError, OutputParserException):
-                pass
-        raise StructuredOutputError(InsightDecision, 2)
+        return loop, tools, task
+
+    @staticmethod
+    def _task(task: str, attempt: int) -> str:
+        return task if attempt == 0 else task + ('\nПредыдущая попытка не дала корректного decide. '
+                                                 'Заверши ответ вызовом decide со всеми обязательными полями.')
+
+    @staticmethod
+    def _done(decision, tools) -> 'InsightDecision | None':
+        if decision is not None:
+            decision.calculation_facts = list(tools.calculations.facts.values())
+            decision.calculation_bank = list(tools.calculations.bank_sources.values())
+            decision.bank_evidence = list(tools.bank_tools.evidence.values())
+        return decision
