@@ -16,7 +16,11 @@ def load_company(company_id: str) -> CompanyInputs:
     Context uses a separate category: existing retrieval generators still see the original fact categories.
     Rule-derived factors and sensitivities are explicitly labelled as hypotheses, including in their text.
     """
-    profile = load_profile(company_id)
+    return company_inputs(load_profile(company_id))
+
+
+def company_inputs(profile: dict) -> CompanyInputs:
+    """Adapt an already-loaded profile without rebuilding it for a second API projection."""
     facts = [dict(f) for f in profile['facts']]
     for i, line in enumerate(brief(profile), 1):
         hypothesis = line.startswith(('[sensitivity]', '[factor '))

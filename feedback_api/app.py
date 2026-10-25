@@ -10,10 +10,6 @@ import hmac
 import logging
 import os
 import re
-import json
-import queue
-import threading
-from weakref import WeakValueDictionary
 from contextlib import asynccontextmanager
 from typing import Annotated
 from uuid import UUID
@@ -23,11 +19,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from common.personalization import Personalization, feedback_db
+from common.personalization import Personalization, ProfileAnswer, feedback_db
+from common.roles import roles
+from feedback_api.profile import latest_results
 from feedback_api.analyzer import FeedbackAnalyzer, InvalidAnalysis
 from feedback_api.importer import register_results
 from feedback_api.schemas import FeedbackInput, FeedbackRecord, InsightRecord, Kind, Question, ReactionSummary, RegisterInsight, Scope
 from feedback_api.store import Conflict, NotFound, Store
+from feedback_api.company_chat import analyze_company, load_company_context, public_message
+from feedback_api.company_store import CompanyChats
+from feedback_api.schemas import CompanyChatContext, CompanyChatQuestion, CompanyConversation
+from feedback_api.streaming import AnswerStreams
 
 log = logging.getLogger(__name__)
 USER_ID = re.compile(r'[\w.@-]{1,100}')
@@ -40,20 +42,34 @@ class ImportResults(BaseModel):
     results: list[dict] = Field(max_length=50, description='rows of data/insights/<company>_<role>.json')
 
 
-def create_app(store: Store | None = None, analyzer=None, api_token: str | None = None, news_lookup=None, facts=None) -> FastAPI:
+class AnswerInput(BaseModel):
+    statement: str = Field(min_length=4, max_length=300)
+    verdict: str = Field(pattern='^(yes|no|other)$')
+    text: str = Field('', max_length=500)
+
+
+class CompanyChatStart(BaseModel):
+    company_id: str = Field(min_length=1, max_length=100)
+    role: str = Field(min_length=1, max_length=100)
+
+
+def create_app(store: Store | None = None, analyzer=None, api_token: str | None = None, news_lookup=None, facts=None,
+               results_loader=latest_results, company_context_loader=load_company_context,
+               company_research_factory=None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app):
         app.state.store = store if store is not None else Store(feedback_db())
         app.state.store.initialize()
+        app.state.company_chats = CompanyChats(app.state.store)
+        app.state.company_chats.initialize()
         yield
 
     app = FastAPI(title='Alfa Insight Feedback API', version='1.0.0', lifespan=lifespan,
                   description='Reactions and questions on ready insights. User input never overwrites bank facts.')
-    app.add_middleware(CORSMiddleware, allow_origins=ORIGINS, allow_methods=['GET', 'POST', 'DELETE'],
+    app.add_middleware(CORSMiddleware, allow_origins=ORIGINS, allow_methods=['GET', 'POST', 'PUT', 'DELETE'],
                        allow_headers=['Content-Type', 'X-User-ID', 'Authorization'])
     processor = analyzer if analyzer is not None else FeedbackAnalyzer()
-    stream_locks = WeakValueDictionary()
-    stream_locks_guard = threading.Lock()
+    streams = AnswerStreams()
     token = api_token if api_token is not None else os.environ.get('FEEDBACK_API_TOKEN', '')
 
     def user(x_user_id: Annotated[str, Header(max_length=100)], authorization: Annotated[str | None, Header()] = None) -> str:
@@ -133,7 +149,7 @@ def create_app(store: Store | None = None, analyzer=None, api_token: str | None 
         """A question to the insight: the answer cites news:/fact:/bank: ids of the insight or explicit lookups."""
         require_inference()
         record = app.state.store.add(user_id, str(insight_id), FeedbackInput(
-            kind=Kind.question, comment=body.question, request_id=body.request_id,
+            kind=Kind.question, comment=body.question, selected_text=body.selected_text, selected_source=body.selected_source, request_id=body.request_id,
             scope=Scope.future if body.remember else Scope.insight))
         return analyze(user_id, record)
 
@@ -145,45 +161,61 @@ def create_app(store: Store | None = None, analyzer=None, api_token: str | None 
         """
         require_inference()
         record = app.state.store.add(user_id, str(insight_id), FeedbackInput(
-            kind=Kind.question, comment=body.question, request_id=body.request_id,
+            kind=Kind.question, comment=body.question, selected_text=body.selected_text, selected_source=body.selected_source, request_id=body.request_id,
             scope=Scope.future if body.remember else Scope.insight))
-        with stream_locks_guard:
-            lock = stream_locks.setdefault(record.id, threading.Lock())
-        events = queue.Queue()
+        def work(on_response):
+            current = app.state.store.feedback(user_id, record.id)
+            if current.analysis is None:
+                insight = app.state.store.insight(user_id, current.insight_id)
+                history = app.state.store.recent(user_id, current)
+                result = processor.analyze(insight, current, history, on_response=on_response)
+                current = app.state.store.save_analysis(user_id, current.id, result)
+            return current.model_dump(mode='json')
 
-        def work():
-            try:
-                with lock:
-                    current = app.state.store.feedback(user_id, record.id)
-                    if current.analysis is None:
-                        insight = app.state.store.insight(user_id, current.insight_id)
-                        history = app.state.store.recent(user_id, current)
-                        result = processor.analyze(insight, current, history,
-                            on_response=lambda text: events.put(('text', {'text': text})))
-                        current = app.state.store.save_analysis(user_id, current.id, result)
-                    events.put(('complete', current.model_dump(mode='json')))
-            except Exception as exc:
-                log.warning('streamed analysis failed: %s', type(exc).__name__)
-                status = 503 if str(exc).startswith('set LLM_API_KEY') else 502
-                events.put(('error', {'status': status, 'message': 'Answer unavailable; the message is saved, retry later'}))
-            finally:
-                events.put(None)
+        return streams.response(record.id, work)
 
-        def generate():
-            threading.Thread(target=work, daemon=True).start()
-            while True:
-                try:
-                    event = events.get(timeout=15)
-                except queue.Empty:
-                    yield ': keep-alive\n\n'
-                    continue
-                if event is None:
-                    break
-                name, data = event
-                yield f'event: {name}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n'
+    def company_context(user_id, company_id, role):
+        try:
+            context = CompanyChatContext.model_validate(company_context_loader(app.state.store, user_id, company_id, role))
+            if (context.evidence.company_id, context.evidence.role) != (company_id, role):
+                raise ValueError('Company context does not match conversation')
+            return context
+        except (KeyError, ValueError, FileNotFoundError) as exc:
+            raise HTTPException(404, 'Company context is unavailable') from exc
 
-        return StreamingResponse(generate(), media_type='text/event-stream',
-                                 headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
+    @app.post('/v1/company-chats', response_model=CompanyConversation)
+    def company_chat(body: CompanyChatStart, user_id: User):
+        require_inference()
+        profile_id(body.company_id)
+        if body.role not in roles():
+            raise HTTPException(422, 'Unknown role')
+        # Opening reads local context but never invokes a model or registers a synthetic insight.
+        company_context(user_id, body.company_id, body.role)
+        return app.state.company_chats.open(user_id, body.company_id, body.role)
+
+    @app.get('/v1/company-chats/{conversation_id}/messages')
+    def company_chat_history(conversation_id: UUID, user_id: User, limit: int = Query(50, ge=1, le=100), before: UUID | None = None):
+        items, more = app.state.company_chats.history(user_id, str(conversation_id), limit, str(before) if before else None)
+        return dict(items=[public_message(item) for item in items], has_more=more,
+                    before=items[0].id if more and items else None)
+
+    @app.post('/v1/company-chats/{conversation_id}/ask/stream', response_class=StreamingResponse)
+    def company_chat_ask(conversation_id: UUID, body: CompanyChatQuestion, user_id: User):
+        require_inference()
+        chats = app.state.company_chats
+        conversation = chats.conversation(user_id, str(conversation_id))
+        record = chats.add(user_id, conversation.id, body,
+                           lambda: company_context(user_id, conversation.company_id, conversation.role))
+
+        def work(on_response):
+            current = chats.message(user_id, record.id)
+            if current.analysis is None:
+                result = analyze_company(processor, conversation, user_id, current, chats.recent(user_id, current),
+                                         on_response=on_response, research_factory=company_research_factory)
+                current = chats.save_analysis(user_id, current.id, result)
+            return public_message(current)
+
+        return streams.response('company:' + record.id, work)
 
     @app.get('/v1/insights/{insight_id}/feedback', response_model=list[FeedbackRecord])
     def history(insight_id: UUID, user_id: User, limit: int = Query(50, ge=1, le=100), offset: int = Query(0, ge=0)):
@@ -202,6 +234,44 @@ def create_app(store: Store | None = None, analyzer=None, api_token: str | None 
     def personalization(company_id: str, user_id: User, role: str = Query(min_length=1, max_length=100)):
         """What `pipeline.py --user-id` will apply on the next selection for this (user, company, role)."""
         return app.state.store.personalization(user_id, company_id, role)
+
+    def profile_id(company_id, question_id=None):
+        if not re.fullmatch(r'[A-Za-z0-9_-]{1,100}', company_id):
+            raise HTTPException(422, 'Invalid company_id')
+        if question_id is not None and not re.fullmatch(r'q_[0-9a-f]{12}', question_id):
+            raise HTTPException(422, 'question_id: q_ + 12 hex digits')
+
+    @app.get('/v1/companies/{company_id}/questions')
+    def questions(company_id: str, user_id: User, role: str = Query(min_length=1, max_length=100)):
+        from stage2_company_facts.questions.questions import questions as make
+        profile_id(company_id)
+        if role not in roles():
+            raise HTTPException(422, 'Unknown role')
+        answered = {a.question_id: a for a in app.state.store.answers(user_id, company_id)}
+        out = make(results_loader(company_id, role, user_id))
+        ids = {q['id'] for q in out}
+        # Saved answers remain editable even after a new analysis drops that assumption or the role changes.
+        out += [dict(id=a.question_id, text=a.statement, question=f'Верно ли, что {a.statement}?',
+                     **{'for': 'ранее вы уточняли это о компании'}, impact='Учитываем в следующих анализах.', insights=[])
+                for a in answered.values() if a.question_id not in ids]
+        for q in out:
+            q['answer'] = answered[q['id']].model_dump() if q['id'] in answered else None
+        return out
+
+    @app.put('/v1/companies/{company_id}/answers/{question_id}', response_model=ProfileAnswer)
+    def answer(company_id: str, question_id: str, body: AnswerInput, user_id: User):
+        require_inference()
+        profile_id(company_id, question_id)
+        if not body.statement.strip() or (body.verdict == 'other' and not body.text.strip()):
+            raise HTTPException(422, 'Statement and text for verdict=other must not be empty')
+        return app.state.store.set_answer(user_id, company_id, ProfileAnswer(question_id=question_id, **body.model_dump()))
+
+    @app.delete('/v1/companies/{company_id}/answers/{question_id}', status_code=204)
+    def delete_answer(company_id: str, question_id: str, user_id: User):
+        require_inference()
+        profile_id(company_id, question_id)
+        app.state.store.delete_answer(user_id, company_id, question_id)
+        return Response(status_code=204)
 
     return app
 

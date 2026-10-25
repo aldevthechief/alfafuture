@@ -37,6 +37,14 @@
 .hitl{padding:20px;margin-top:16px;display:flex;flex-direction:column;gap:8px;border:1.5px solid var(--blue)}
 .hitl-head{display:flex;align-items:center;justify-content:space-between}
 .hitl-input{flex:1}
+.profile-motion{overflow:clip;overflow-anchor:none}
+.profile-motion-content{display:flow-root}
+.hitl-copy{display:flex;flex-direction:column;gap:8px;animation:profile-copy-arrive .18s ease}
+.hitl-save-status{min-height:18px;font-size:12px;line-height:18px;color:var(--text-2)}
+.hitl .iw-btns{min-height:40px}
+.hitl button,.prof button{transition:background-color .15s,color .15s,box-shadow .15s,opacity .15s}
+@keyframes profile-copy-arrive{from{opacity:.3}to{opacity:1}}
+@media(prefers-reduced-motion:reduce){.hitl-copy{animation:none}.hitl button,.prof button{transition:none}}
 
 /* backend status line under the page subtitle */
 .ip-live{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:-4px 0 16px}
@@ -106,3 +114,5 @@
 .insight-detail-tone-positive>h2{color:var(--signal-positive)}
 .layer-risk{border-left:4px solid var(--signal-negative);background:var(--signal-negative-bg)}
 .layer-opportunity{border-left:4px solid var(--signal-positive);background:var(--signal-positive-bg)}
+:root .profile-error {padding:14px 18px;margin:12px 0;border:1px solid var(--red);border-radius:12px;background:var(--card);font-size:13px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+:root .profile-note {color:var(--text-2);font-size:13px;line-height:1.6;margin:10px 0}

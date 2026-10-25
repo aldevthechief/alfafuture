@@ -17,12 +17,14 @@ import './theme.css';
 import { compactKey, useCompactFeed } from './compactFeed.js';
 import { initialSession, sessionAccount } from './accountSession.js';
 import { CompanySwitcher } from './companySwitcher.jsx';
+import { useCompanyProfile } from './companyProfile.js';
 
 let insightWindowModule;
 const prepareInsightWindow = () => insightWindowModule ??= import('./insightWindow.jsx')
   .then(module => ({ default: module.InsightWindow }));
 const InsightWindow = lazy(prepareInsightWindow);
 const InsightPage = lazy(() => import('./insightPage.jsx'));
+const CompanyChat = lazy(() => import('./companyChat.jsx'));
 
 function useView() {
   const [view, setView] = useState(() => document.querySelector('.view.active')?.id.replace('view-', '') || 'home');
@@ -34,8 +36,6 @@ function useView() {
   return view;
 }
 const EMPTY_ANSWERS = {};
-// Profile answers still use the demo handler; insight feedback is persisted by feedback_api.
-const send = (kind, payload) => console.info(kind, payload);
 
 function useCtx() {
   const [ctx, setCtx] = useState(window.demoContext);
@@ -87,15 +87,28 @@ function App() {
   const [open, setOpen] = useState(null);
   const [hidden, setHidden] = useState([]);
   const [answers, setAnswers] = useState({}); // company id → hypothesis id → {verdict, text}
+  const [bankChat, setBankChat] = useState({ mounted:false, open:false });
+  useEffect(() => {
+    const toggle = () => setBankChat(value => ({ mounted:true, open:!value.open }));
+    window.addEventListener('cabinet:chat', toggle);
+    return () => window.removeEventListener('cabinet:chat', toggle);
+  }, []);
+  useEffect(() => {
+    document.getElementById('fab')?.setAttribute('aria-expanded', String(bankChat.open));
+    return () => document.getElementById('fab')?.setAttribute('aria-expanded', 'false');
+  }, [bankChat.open]);
   const [live, run] = useLive(ctx);
+  const [profileState, saveProfileAnswer] = useCompanyProfile(ctx, live.feed, view === 'insights' && API_ENABLED && !!ctx.company_meta);
   useEffect(() => setOpen(null), [ctx.company, ctx.role]);
   useEffect(() => {
     if (ctx.kind) { setData({ roles:[], sources:{} }); return; }
     fetch('feed.json').then(r => r.json()).then(setData);
   }, [ctx.kind]);
 
-  const company = useMemo(() => ctx.company_meta ? { profile:{ name:ctx.company_meta.name, industry:ctx.company_meta.sector,
-    scale:'Данные кейса', group:'—', bank_products:[], hypotheses:[], channels:[] } } : data?.companies?.[ctx.company], [ctx.company_meta, ctx.company, data]);
+  const company = useMemo(() => ctx.company_meta ? { profile:{ industry:ctx.company_meta.sector,
+    ...profileState.profile, name:ctx.company_meta.name,
+    bank_products:profileState.profile?.bank_products || [], hypotheses:profileState.questions,
+    channels:profileState.profile?.channels || [] } } : data?.companies?.[ctx.company], [ctx.company_meta, ctx.company, data, profileState.profile, profileState.questions]);
   const feed = live.feed || (ctx.kind ? undefined : company?.feeds[ctx.role]);
   const sources = live.feed ? live.feed.sources : data?.sources;
   const role = ctx.role_title || data?.roles.find(r => r.id === ctx.role)?.name;
@@ -107,16 +120,22 @@ function App() {
   const close = useCallback(() => setOpen(null), []);
   const restore = useCallback(() => setHidden([]), []);
   const answer = useCallback((hid, a) => {
-    send('profile_answer', { company: ctx.company, hypothesis: hid, ...a });
+    if (ctx.company_meta) return saveProfileAnswer(hid, a);
     setAnswers(all => ({ ...all, [ctx.company]: { ...all[ctx.company], [hid]: a } }));
-  }, [ctx.company]);
+    return Promise.resolve(true);
+  }, [ctx.company, ctx.company_meta, saveProfileAnswer]);
   if (!data) return null;
   const slot = id => document.getElementById(id);
 
   return <>
+    {bankChat.mounted && <Suspense fallback={<div role="status" className="insight-opening">Открываем чат…</div>}>
+      <CompanyChat company={ctx.company} role={ctx.role} name={ctx.company_meta?.name || company?.profile.name}
+        roleTitle={role} open={bankChat.open} onClose={() => setBankChat(value => ({ ...value,open:false }))} />
+    </Suspense>}
     {createPortal(<HomeWidget insights={visible} state={live.state} error={live.error} onOpen={setOpen} />, slot('insights-widget'))}
     {view === 'insights' && createPortal(<Suspense fallback={<p role="status">Загружаем ленту…</p>}>
-      <InsightPage {...{ company, feed, role, live, run, visible, hidden, answers: answers[ctx.company] || EMPTY_ANSWERS, answer, onOpen: setOpen, onRestore: restore }} />
+      <InsightPage {...{ company, feed, role, live, run, visible, hidden, profileState:ctx.company_meta ? profileState : undefined,
+        answers:ctx.company_meta ? profileState.answers : answers[ctx.company] || EMPTY_ANSWERS, answer, onOpen: setOpen, onRestore: restore }} />
     </Suspense>, slot('insights-page'))}
     {open && <Suspense fallback={<div className="insight-opening" role="status">Открываем инсайт…</div>}>
       <InsightWindow key={`${ctx.company}:${ctx.role}:${open.job_id || 'demo'}:${open.id}`}

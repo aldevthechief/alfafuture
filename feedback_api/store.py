@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
-from common.personalization import Personalization, Reaction, UserNote
+from common.personalization import Personalization, ProfileAnswer, Reaction, UserNote
 from feedback_api.schemas import Analysis, FeedbackInput, FeedbackRecord, InsightRecord, Kind, ReactionSummary, RegisterInsight
 
 
@@ -63,11 +63,45 @@ class Store:
                     id TEXT PRIMARY KEY, insight_id TEXT NOT NULL REFERENCES insights(id) ON DELETE CASCADE,
                     kind TEXT NOT NULL, comment TEXT NOT NULL, emoji TEXT NOT NULL, scope TEXT NOT NULL,
                     request_id TEXT NOT NULL, analysis TEXT, created_at TEXT NOT NULL,
+                    selected_text TEXT NOT NULL DEFAULT '', selected_source TEXT NOT NULL DEFAULT 'insight',
                     UNIQUE(insight_id, request_id)
                 );
                 CREATE INDEX IF NOT EXISTS insight_owner ON insights(user_id, company_id, role);
                 CREATE INDEX IF NOT EXISTS feedback_history ON feedback(insight_id, created_at);
+                CREATE TABLE IF NOT EXISTS profile_answers (
+                    user_id TEXT NOT NULL, company_id TEXT NOT NULL, question_id TEXT NOT NULL,
+                    statement TEXT NOT NULL, verdict TEXT NOT NULL, text TEXT NOT NULL, updated_at TEXT NOT NULL,
+                    PRIMARY KEY(user_id, company_id, question_id)
+                );
             ''')
+            db.execute('BEGIN IMMEDIATE')  # serialize the migration if several workers start together
+            if 'selected_text' not in {row['name'] for row in db.execute('PRAGMA table_info(feedback)')}:
+                db.execute("ALTER TABLE feedback ADD COLUMN selected_text TEXT NOT NULL DEFAULT ''")
+            if 'selected_source' not in {row['name'] for row in db.execute('PRAGMA table_info(feedback)')}:
+                db.execute("ALTER TABLE feedback ADD COLUMN selected_source TEXT NOT NULL DEFAULT 'insight'")
+
+    # A user's company facts hold across reader roles; bank facts are never overwritten.
+    def set_answer(self, user_id: str, company_id: str, answer: ProfileAnswer) -> ProfileAnswer:
+        with self.connection() as db:
+            db.execute('''INSERT INTO profile_answers VALUES (?, ?, ?, ?, ?, ?, ?)
+                          ON CONFLICT(user_id, company_id, question_id) DO UPDATE SET
+                          statement=excluded.statement, verdict=excluded.verdict, text=excluded.text, updated_at=excluded.updated_at''',
+                       (user_id, company_id, answer.question_id, answer.statement, answer.verdict, answer.text, now()))
+        return answer
+
+    def delete_answer(self, user_id: str, company_id: str, question_id: str):
+        with self.connection() as db:
+            db.execute('DELETE FROM profile_answers WHERE user_id=? AND company_id=? AND question_id=?',
+                       (user_id, company_id, question_id))
+
+    def answers(self, user_id: str, company_id: str) -> list[ProfileAnswer]:
+        with self.connection() as db:
+            # The pipeline can read an old database before feedback-api has run its migration.
+            if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='profile_answers'").fetchone():
+                return []
+            rows = db.execute('''SELECT question_id, statement, verdict, text FROM profile_answers
+                                 WHERE user_id=? AND company_id=? ORDER BY updated_at DESC LIMIT 30''', (user_id, company_id)).fetchall()
+        return [ProfileAnswer(**dict(row)) for row in rows]
 
     # --- insights ---
     def register(self, user_id: str, body: RegisterInsight) -> InsightRecord:
@@ -113,11 +147,13 @@ class Store:
     def add(self, user_id: str, insight_id: str, body: FeedbackInput) -> FeedbackRecord:
         self.insight(user_id, insight_id)  # ownership check
         with self.connection() as db:
-            db.execute('INSERT OR IGNORE INTO feedback VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?)',
-                       (str(uuid4()), insight_id, body.kind, body.comment, body.emoji, body.scope, body.request_id, now()))
+            db.execute('''INSERT OR IGNORE INTO feedback
+                          (id, insight_id, kind, comment, emoji, scope, request_id, analysis, created_at, selected_text, selected_source)
+                          VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)''',
+                       (str(uuid4()), insight_id, body.kind, body.comment, body.emoji, body.scope, body.request_id, now(), body.selected_text, body.selected_source))
             row = db.execute('SELECT * FROM feedback WHERE insight_id=? AND request_id=?', (insight_id, body.request_id)).fetchone()
             record = self.feedback_record(row)
-            if (record.kind, record.comment, record.emoji, record.scope) != (body.kind, body.comment, body.emoji, body.scope):
+            if (record.kind, record.comment, record.emoji, record.scope, record.selected_text, record.selected_source) != (body.kind, body.comment, body.emoji, body.scope, body.selected_text, body.selected_source):
                 raise Conflict('request_id already used with a different payload')
         return record
 
@@ -184,4 +220,6 @@ class Store:
                           for n in f.analysis.context_notes]
             elif f.comment and f.kind not in (Kind.question,):
                 notes.append(UserNote(source_id=f'user:{f.id}', kind=f.kind, text=f.comment))
-        return Personalization.from_reactions(user_id, company_id, role, list(reversed(reactions)), notes[:40])
+        pers = Personalization.from_reactions(user_id, company_id, role, list(reversed(reactions)), notes[:40])
+        pers.answers = self.answers(user_id, company_id)
+        return pers

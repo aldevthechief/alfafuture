@@ -81,7 +81,7 @@ def scoped_personalization(value: Personalization | None, company_id: str, role:
 
 
 def personalization_context(value: Personalization | None) -> str:
-    if value is None or not (value.notes or value.topic_weights):
+    if value is None or not (value.notes or value.topic_weights or value.answers):
         return ''
     return render_untrusted('user_context', 'Со слов пользователя: не проверенные факты и не позиция Банка',
                             value.render(), body_limit=16000)
@@ -159,6 +159,9 @@ class InsightPipeline:
         if isinstance(self.related, RelatedNews):
             self.related.refresh()
         facts = build([company_id], use_profiles=True)[company_id]                     # stage 2
+        pers = self._params.get('personalization')
+        if pers is not None and pers.answers:
+            facts = [*facts, *pers.answer_facts()]
         self._params.update(facts=facts,
                             key_facts=[f'[{f["cat"]}] {f["text"]}' for f in facts if f['depth'] == 1],
                             # the judge reads every fact through its company_facts tool, so the writer and the audit
@@ -375,6 +378,8 @@ def run_loop(company_id: str, role: str, models: ChatModels, n_candidates: int =
     stage2 = load_company(company_id)
     profile = CompanyProfile(**stage2.card)
     facts = stage2.facts
+    if pers is not None and pers.answers:
+        facts = [*facts, *pers.answer_facts()]
     shortlist, _ = candidates(company_id, role, top=n_candidates, facts=facts, method=retrieval)
     source_news = getattr(getattr(pool, 'related', None), 'news', None)
     if isinstance(source_news, pd.DataFrame):

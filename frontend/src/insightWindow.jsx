@@ -13,6 +13,9 @@ import { insightSignal } from './insightSignal.js';
 import { SignalBadge } from './insightSignal.jsx';
 import { InsightIcon } from './insightIcons.jsx';
 import { InsightTabs } from './insightTabs.jsx';
+import { InsightReader } from './insightReader.jsx';
+import { ChatSplit } from './chatSplit.jsx';
+import { FEEDBACK_ENABLED } from './feedback.js';
 import './insightWorkspace.css';
 
 const NO_TRANSITION = { enter: false, exit: false, timeout: 0 };
@@ -101,6 +104,8 @@ function InsightDetails({ insight: i, compact, sources, company, onClose, onHide
   const id = useId();
   const [tab, setTab] = useState('overview');
   const [expanded, setExpanded] = useState(false);
+  const [readerOpen, setReaderOpen] = useState(true);
+  const [selectedQuote, setSelectedQuote] = useState(null);
   const changeTab = next => {
     setTab(next);
     requestAnimationFrame(() => document.getElementById(`${id}-${next}-tab`)?.focus());
@@ -160,20 +165,26 @@ function InsightDetails({ insight: i, compact, sources, company, onClose, onHide
       <section className="workbench-panel workbench-chat" id={`${id}-chat-panel`} role="tabpanel"
         aria-labelledby={`${id}-chat-tab`} hidden={tab !== 'chat'}>
         {/* Keep mounted: changing tabs must preserve drafts, scroll and an answer in flight. */}
-        <div className="chat-workspace">
-          <InsightDiscussion company={company} insight={i} variant="workspace" active={tab === 'chat'} feedbackTarget={feedbackTarget} />
-          <aside className="chat-context" aria-label="Контекст обсуждения">
+        <ChatSplit reading={readerOpen}>
+          <InsightDiscussion company={company} insight={i} variant="workspace" active={tab === 'chat'} feedbackTarget={feedbackTarget}
+            readerOpen={readerOpen} onToggleReader={() => setReaderOpen(value => !value)}
+            selectedQuote={selectedQuote} onClearQuote={() => setSelectedQuote(null)} onQuote={setSelectedQuote} />
+          {readerOpen ? <InsightReader insight={i} compact={compact} canAsk={FEEDBACK_ENABLED && !!i.pipeline_result}
+            onQuote={text => { setSelectedQuote({ text }); if (window.matchMedia('(max-width: 900px)').matches) setReaderOpen(false); }} onClose={() => setReaderOpen(false)}>
+            <details className="chat-context-sources"><summary>Материалы и источники · {used.length}</summary><Sources ids={used} sources={sources} /></details>
+          </InsightReader> : <aside className="chat-context" aria-label="Контекст обсуждения">
             <div className="chat-context-heading"><InsightIcon name="document" size={18} /><span>В фокусе разговора</span></div>
             <div className="ic-tags"><SignalBadge insight={i} /></div>
             <h3>{v.title}</h3>
             <p className="chat-context-lead">{v.lead}</p>
+            <button className="chat-context-link" type="button" onClick={() => setReaderOpen(true)}>Читать текст и выделить фрагмент<InsightIcon name="document" size={16} /></button>
             <button className="chat-context-link" type="button" onClick={() => changeTab('overview')}>К обзору инсайта<InsightIcon name="arrow" size={16} /></button>
             <details className="chat-context-sources"><summary>Материалы и источники · {used.length}</summary>
             <Sources ids={used} sources={sources} />
             </details>
             <div className="chat-context-note"><InsightIcon name="sparkle" size={17} /><p>Один инсайт — отдельный разговор. История обсуждения сохраняется здесь.</p></div>
-          </aside>
-        </div>
+          </aside>}
+        </ChatSplit>
       </section>
     </div>
     <footer className="workbench-footer" hidden={tab === 'chat'}>

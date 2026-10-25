@@ -51,13 +51,15 @@ test('streaming chat handles split UTF-8 and SSE frames and returns the persiste
     if (url.endsWith('/import')) return {ok:true,json:async()=>[{id:'stream-uuid'}]};
     assert.ok(url.endsWith('/stream-uuid/ask/stream'));
     assert.equal(JSON.parse(init.body).request_id,'request-1');
+    assert.equal(JSON.parse(init.body).selected_text,'Выделенная фраза');
+    assert.equal(JSON.parse(init.body).selected_source,'answer');
     return {ok:true,body:new ReadableStream({start(controller){
       for(let n=0;n<bytes.length;n+=3) controller.enqueue(bytes.slice(n,n+3));
       controller.close();
     }})};
   });
   const texts=[];
-  assert.deepEqual(await askQuestion('U_1',card,'Вопрос','request-1',text=>texts.push(text)),answer);
+  assert.deepEqual(await askQuestion('U_1',card,'Вопрос','request-1',text=>texts.push(text),'Выделенная фраза','answer'),answer);
   assert.deepEqual(texts,['Привет','Привет, мир!']);
 });
 

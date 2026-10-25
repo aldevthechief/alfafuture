@@ -10,12 +10,14 @@ from feedback_api.schemas import InsightRecord, RetrievedSource, ToolTrace
 
 
 class ResearchTools:
-    def __init__(self, insight: InsightRecord, *, related_factory=None, facts_loader=None,
+    def __init__(self, insight: InsightRecord | None = None, *, company_id: str | None = None, related_factory=None, facts_loader=None,
                  bank_factory=None, company_factory=None, max_calls: int = 4):
         self.insight = insight
-        self.company_id = insight.company_id
-        self.news_id = insight.news_id if insight.news_id is not None else (
-            insight.evidence.news[0].id if insight.evidence and insight.evidence.news else None)
+        self.company_id = insight.company_id if insight is not None else company_id
+        if not self.company_id:
+            raise ValueError('Company is required')
+        self.news_id = (insight.news_id if insight.news_id is not None else (
+            insight.evidence.news[0].id if insight.evidence and insight.evidence.news else None)) if insight is not None else None
         self.related_factory, self.facts_loader = related_factory, facts_loader
         self.bank_factory, self.company_factory = bank_factory, company_factory
         self._related = self._bank = self._company = None
@@ -25,9 +27,11 @@ class ResearchTools:
 
     def as_tools(self):
         from langchain_core.tools import StructuredTool
-        return [StructuredTool.from_function(f) for f in (
-            self.same_event_reports, self.follow_up_news, self.search_news, self.company_facts,
-            self.company_card, self.counterparties, self.group_members, self.search_bank_analytics)]
+        methods = [self.search_news, self.company_facts, self.company_card, self.counterparties,
+                   self.group_members, self.search_bank_analytics]
+        if self.insight is not None:
+            methods = [self.same_event_reports, self.follow_up_news, *methods]
+        return [StructuredTool.from_function(f) for f in methods]
 
     def _run(self, name, arguments, fetch):
         args = {k: str(v)[:250] for k, v in arguments.items()}
@@ -41,7 +45,9 @@ class ResearchTools:
             self.trace.append(ToolTrace(name=name, arguments=args, status='unavailable'))
             return json.dumps({'error': f'Data unavailable ({type(exc).__name__}); do not invent missing facts.'})
         delivered, call_chars = [], 0
-        for source_id, origin, text in entries:
+        for entry in entries:
+            source_id, origin, text = entry[:3]
+            metadata = entry[3] if len(entry) > 3 else {}
             if source_id in self.sources:
                 continue
             cap = min(5000, 6000 - call_chars, 16000 - self.source_chars)
@@ -50,7 +56,7 @@ class ResearchTools:
             text = str(text)
             excerpt = text if len(text) <= cap else text[:max(0, cap - 15)] + '\n[truncated]'
             source = RetrievedSource(id=source_id, origin=origin, text=excerpt, retrieved_at=datetime.now(timezone.utc).isoformat(),
-                                     company_id=self.company_id if origin == 'company_data' else None)
+                                     company_id=self.company_id if origin == 'company_data' else None, **metadata)
             self.sources[source_id] = source  # first delivered version: later calls cannot change a cited source
             delivered.append(source.model_dump())
             call_chars += len(source.text)
@@ -82,7 +88,9 @@ class ResearchTools:
         for news_id in table['id'].tolist()[:3]:
             news = self._news().get(int(news_id))
             rows.append((f'lookup:news:{int(news_id)}', 'news_pool',
-                         f'{news["date"]}, {news["source"]}: {news["title"]}\n{str(news["text"])[:1800]}'))
+                         f'{news["date"]}, {news["source"]}: {news["title"]}\n{str(news["text"])[:1800]}',
+                         dict(title=str(news['title'])[:2000], url=str(news.get('url') or '')[:4000] or None,
+                              date=str(news['date'])[:100])))
         return rows
 
     @staticmethod
@@ -160,6 +168,7 @@ class ResearchTools:
             for hit in self._bank.search(q, k=3):
                 digest = hashlib.sha256(hit['text'].encode()).hexdigest()[:16]
                 text = f'{hit["report"]}, {hit["date"]}, p.{hit["page"]}{", STALE" if hit.get("stale") else ""}\n{hit["text"][:1800]}'
-                rows.append((f'lookup:bank:{hit["report"]}:{hit["page"]}:{digest}', 'bank_analytics', text))
+                rows.append((f'lookup:bank:{hit["report"]}:{hit["page"]}:{digest}', 'bank_analytics', text,
+                             dict(title=str(hit['report'])[:2000], page=hit['page'], date=str(hit['date'])[:100])))
             return rows
         return self._run('search_bank_analytics', {'query': query}, fetch)

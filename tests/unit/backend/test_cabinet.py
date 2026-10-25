@@ -224,9 +224,29 @@ class CabinetTests(unittest.TestCase):
              patch.object(self.service, 'prepare') as prepare, TestClient(create_app()):
             prepare.assert_not_called()
 
+    def test_company_profile_projects_real_products_scale_and_channels_without_models(self):
+        profile = dict(id='U_1', card=dict(okved_name='Финансовый лизинг', revenue=20e9, products=['loan','leasing'], region='Москва'),
+            scale=dict(class_ru='крупный бизнес', class_basis='выручка', case_large=True, group_case_large=True),
+            facts=[dict(cat='group', text='Группа из трёх компаний', depth=1)], sensitivity={},
+            external_factors=[dict(label='Ключевая ставка', mechanism='Влияет на стоимость фондирования', weight=1)])
+        with patch('stage2_company_facts.profile.load.load_profile', return_value=profile), \
+             TestClient(create_app(self.service)) as client:
+            response = client.get('/v1/companies/U_1')
+            self.assertEqual(response.status_code, 200, response.text)
+            data = response.json()
+            self.assertEqual(data['profile']['name'], 'Финансовый лизинг №1')
+            self.assertEqual(data['profile']['bank_products'], ['Кредитные продукты','Лизинг'])
+            self.assertIn('Крупный бизнес', data['profile']['scale'])
+            self.assertEqual(data['profile']['group'], 'Группа из трёх компаний')
+            self.assertEqual(data['profile']['channels'][0]['name'], 'Ключевая ставка')
+            self.assertEqual(data['card'], profile['card'])
+            self.assertTrue(data['facts'])
+        self.models.assert_not_called()
+
     def test_server_variant_disables_the_separate_discussion_service(self):
         from feedback_api.app import create_app as feedback_app
-        store, analyzer = Mock(), Mock()
+        from feedback_api.store import Store
+        store, analyzer = Mock(wraps=Store(Path(self.tmp.name)/'feedback.sqlite3')), Mock()
         with patch.dict('os.environ', CABINET_MODE='server'), \
              TestClient(feedback_app(store=store, analyzer=analyzer)) as client:
             base = '/v1/insights/00000000-0000-0000-0000-000000000001'

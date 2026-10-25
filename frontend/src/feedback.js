@@ -6,6 +6,7 @@ const BASE = (ENV.VITE_FEEDBACK_API ?? (ENV.DEV ? '/feedback' : 'http://127.0.0.
 export const FEEDBACK_ENABLED = ALLOW_INFERENCE && BASE !== 'off' && BASE !== '';
 const call = (path, body) => requestJson(BASE, path, body === undefined ? {} : { method:'POST', body:JSON.stringify(body) });
 const registrations = new Map();
+const PROFILE_ENABLED = BASE !== 'off' && BASE !== '';
 const keyOf = (company, i) => JSON.stringify([USER_ID, company, i.role, i.job_id, i.id]);
 
 export function registerInsight(company, insight) {
@@ -41,13 +42,17 @@ export const discussionHistory = (company, insight, offset = 0) => withInsight(c
 export const sendReaction = (company, insight, body, requestId) => withInsight(company, insight, record =>
   call(`/v1/insights/${record.id}/feedback`, { ...body, request_id:requestId }));
 
-export const askQuestion = (company, insight, question, requestId, onText) => withInsight(company, insight, record =>
+export const askQuestion = (company, insight, question, requestId, onText, selectedText = '', selectedSource = 'insight') => withInsight(company, insight, record =>
   typeof onText === 'function'
-    ? streamQuestion(record.id, { question, request_id: requestId }, onText)
-    : call(`/v1/insights/${record.id}/ask`, { question, request_id:requestId }));
+    ? streamQuestion(record.id, { question, request_id: requestId, ...(selectedText ? { selected_text: selectedText, ...(selectedSource === 'answer' ? { selected_source:'answer' } : {}) } : {}) }, onText)
+    : call(`/v1/insights/${record.id}/ask`, { question, request_id:requestId, ...(selectedText ? { selected_text: selectedText, ...(selectedSource === 'answer' ? { selected_source:'answer' } : {}) } : {}) }));
 
 async function streamQuestion(id, body, onText) {
-  const response = await fetch(`${BASE}/v1/insights/${id}/ask/stream`, {
+  return streamAnswer(`/v1/insights/${id}/ask/stream`, body, onText);
+}
+
+export async function streamAnswer(path, body, onText) {
+  const response = await fetch(`${BASE}${path}`, {
     method: 'POST', headers: { 'Content-Type': 'application/json', 'X-User-ID': USER_ID, Accept: 'text/event-stream' },
     body: JSON.stringify(body),
   });
@@ -89,12 +94,40 @@ async function streamQuestion(id, body, onText) {
 }
 
 export function answerSources(record, item, cardSources = {}) {
-  const sources = { ...cardSources };
-  const evidence = record?.evidence;
+  // A company chat freezes a new snapshot per message; an insight chat uses its registered snapshot.
+  const evidence = item.evidence || record?.evidence;
+  const sources = evidence ? {} : { ...cardSources };
   (evidence?.facts || []).forEach(f => { sources[f.id] = { kind:'fact', text:f.text }; });
   (evidence?.calculations || []).forEach(f => { sources[f.id] = { kind:'fact', text:f.text }; });
-  (evidence?.news || []).forEach(n => { sources[`news:${n.id}`] = { kind:'news', title:n.title, url:n.url, snippet:n.text }; });
-  (evidence?.bank || []).forEach(b => { sources[b.id] = { kind:'bank', title:b.report, page:b.page, snippet:b.text }; });
-  (item.analysis?.retrieved_sources || []).forEach(s => { sources[s.id] = { title:s.id, snippet:s.text }; });
+  (evidence?.news || []).forEach(n => { sources[`news:${n.id}`] = { kind:'news', title:n.title, url:n.url, date:n.date, snippet:n.text }; });
+  (evidence?.bank || []).forEach(b => { sources[b.id] = { kind:'bank', title:b.report, page:b.page, date:b.date, snippet:b.text }; });
+  (item.analysis?.retrieved_sources || []).forEach(s => { sources[s.id] = {
+    kind:s.origin === 'news_pool' ? 'news' : s.origin === 'bank_analytics' ? 'bank' : 'fact',
+    title:s.title || (s.origin === 'company_data' ? 'Данные компании' : s.text.split('\n')[0]),
+    url:s.url, page:s.page, date:s.date, snippet:s.text,
+  }; });
   return sources;
+}
+
+export const openCompanyChat = (company, role) => call('/v1/company-chats', { company_id:company, role });
+export const companyChatHistory = (id, before) => call(`/v1/company-chats/${encodeURIComponent(id)}/messages${before ? `?before=${encodeURIComponent(before)}` : ''}`);
+export const askCompanyChat = (id, question, requestId, onText, selectedText = '') =>
+  streamAnswer(`/v1/company-chats/${encodeURIComponent(id)}/ask/stream`,
+    { question, request_id:requestId, ...(selectedText ? { selected_text:selectedText } : {}) }, onText);
+
+export const companyQuestions = (company, role) => !PROFILE_ENABLED ? Promise.resolve([])
+  : call(`/v1/companies/${encodeURIComponent(company)}/questions?role=${encodeURIComponent(role)}`);
+
+export async function saveAnswer(company, question, answer) {
+  if (answer?.verdict === 'skip') return;
+  if (!FEEDBACK_ENABLED) throw new Error('Сохранение уточнений в этой версии недоступно.');
+  const path = `/v1/companies/${encodeURIComponent(company)}/answers/${encodeURIComponent(question.id)}`;
+  if (!answer) {
+    const response = await fetch(BASE + path, { method: 'DELETE', headers: { 'X-User-ID': USER_ID } });
+    if (!response.ok) throw new ApiError(response.status, response.statusText);
+    return;
+  }
+  return requestJson(BASE, path, { method: 'PUT', body: JSON.stringify({
+    statement: question.text, verdict: answer.verdict, text: answer.text || '',
+  }) });
 }

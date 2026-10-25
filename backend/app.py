@@ -226,10 +226,13 @@ def create_app(service=None, cors_origins=None):
 
     @app.get('/v1/companies/{company_id}',tags=['companies'])
     def company(company_id: str):
-        from stage2_company_facts.profile.integration import load_company
+        from stage2_company_facts.profile.integration import company_inputs
+        from stage2_company_facts.profile.load import load_profile
+        from backend.company_profile import display_profile
         try:
-            result=load_company(company_id)
-            return jsonable_encoder(dict(card=result.card,facts=result.facts))
+            profile = load_profile(company_id)
+            result = company_inputs(profile)
+            return jsonable_encoder(dict(card=result.card, facts=result.facts, profile=display_profile(profile)))
         except (KeyError,ValueError,FileNotFoundError) as exc: raise HTTPException(404,'Company not found') from exc
     return app
 

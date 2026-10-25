@@ -62,6 +62,8 @@ class RegisterInsight(StrictModel):
 class FeedbackInput(StrictModel):
     kind: Kind = Kind.comment
     comment: str = Field(default='', max_length=4000)
+    selected_text: str = Field(default='', max_length=2000, description='Selected insight or agent answer excerpt; question context, not new evidence')
+    selected_source: Literal['insight', 'answer'] = 'insight'
     emoji: str = Field(default='', max_length=16)
     scope: Scope | None = Field(default=None, description='default: future for reactions, insight for questions and comments')
     request_id: str = Field(min_length=1, max_length=100,
@@ -82,6 +84,8 @@ class FeedbackInput(StrictModel):
 
 class Question(StrictModel):
     question: str = Field(min_length=1, max_length=2000)
+    selected_text: str = Field(default='', max_length=2000)
+    selected_source: Literal['insight', 'answer'] = 'insight'
     request_id: str = Field(min_length=1, max_length=100)
     remember: bool = Field(False, description='allow using preferences stated in the question in future selections')
 
@@ -114,6 +118,10 @@ class RetrievedSource(StrictModel):
     text: str = Field(max_length=6000)
     retrieved_at: str
     company_id: str | None = None
+    title: str = Field('', max_length=2000)
+    url: str | None = Field(None, max_length=4000)
+    page: int | None = None
+    date: str = Field('', max_length=100)
 
 
 class ToolTrace(StrictModel):
@@ -145,6 +153,8 @@ class FeedbackRecord(StrictModel):
     insight_id: str
     kind: Kind
     comment: str
+    selected_text: str = ''
+    selected_source: Literal['insight', 'answer'] = 'insight'
     emoji: str = ''
     scope: Scope
     request_id: str
@@ -156,3 +166,35 @@ class ReactionSummary(StrictModel):
     insight_id: str
     counts: dict[str, int]
     mine: list[str] = Field(description='kinds of this user\'s reactions on the insight')
+
+
+class CompanyChatQuestion(StrictModel):
+    question: str = Field(min_length=1, max_length=2000)
+    request_id: str = Field(min_length=1, max_length=100)
+    selected_text: str = Field(default='', max_length=2000)
+
+
+class CompanyChatContext(StrictModel):
+    card: dict
+    evidence: EvidenceSnapshot
+    user_context: str = ''
+
+
+class CompanyConversation(StrictModel):
+    id: str
+    company_id: str
+    role: str
+    created_at: str
+
+
+class CompanyChatMessage(StrictModel):
+    id: str
+    conversation_id: str
+    comment: str
+    kind: Literal['question'] = 'question'
+    selected_text: str = ''
+    selected_source: Literal['answer'] = 'answer'
+    request_id: str
+    context: CompanyChatContext
+    analysis: AnalysisDetails | None = None
+    created_at: str

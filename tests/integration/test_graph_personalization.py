@@ -52,6 +52,29 @@ def run(pipe, pers=None, workers=2, company='U_1', role='cfo'):
 
 
 class GraphPersonalizationTests(unittest.TestCase):
+    def test_saved_profile_answer_is_loaded_for_the_next_run_and_does_not_modify_bank_facts(self):
+        from common.personalization import load_personalization
+        from feedback_api.app import create_app as feedback_app
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Store(Path(tmp) / 'feedback.sqlite')
+            with TestClient(feedback_app(store=store, api_token='')) as client:
+                response = client.put('/v1/companies/U_1/answers/q_0123456789ab', headers={'X-User-ID':'alice'},
+                    json={'statement':'Часть долга компании плавающая', 'verdict':'no'})
+                self.assertEqual(response.status_code, 200, response.text)
+            with patch('common.personalization.feedback_db', return_value=store.path):
+                pers = load_personalization('alice', 'U_1', 'ceo')
+                pipe = runner()
+                run(pipe, pers, role='ceo')
+                user_facts = [f for f in pipe._params['facts'] if f['cat'] == 'user_profile']
+                self.assertEqual(len(user_facts), 1)
+                self.assertIn('неверно, что часть долга', user_facts[0]['text'])
+                self.assertIn('не проверено банком', user_facts[0]['text'])
+                self.assertIn('часть долга', pipe._params['user_context'])
+                self.assertTrue(load_personalization('bob', 'U_1', 'ceo').empty())
+                self.assertTrue(load_personalization('alice', 'U_2', 'ceo').empty())
+            run(pipe, None)
+            self.assertEqual(pipe._params['facts'], FACTS)
+
     def test_reactions_change_selection_before_model_calls_and_do_not_leak_to_next_run(self):
         pipe = runner()
         pers = Personalization.from_reactions('alice', 'U_1', 'cfo', [

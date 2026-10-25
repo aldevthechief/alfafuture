@@ -43,6 +43,10 @@ export const startAnalysis = (company, role, options = {}) => {
 export const cabinetAccounts = () => call('/v1/cabinet/accounts');
 export const cabinetFeed = (company, role) => call(`/v1/cabinet/feed?company_id=${encodeURIComponent(company)}&role=${encodeURIComponent(role)}`);
 export const searchCompanies = query => call(`/v1/cabinet/companies?q=${encodeURIComponent(query)}`);
+export const companyProfile = company => call(`/v1/companies/${encodeURIComponent(company)}`).then(data => {
+  if (!data.profile) throw new Error('API вернул неполные данные профиля.');
+  return data;
+});
 
 export async function waitJob(id, cancelled, every = 3000) {
   for (;;) {

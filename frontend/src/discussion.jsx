@@ -6,6 +6,10 @@ import { ApiError } from './api.js';
 import { ALLOW_INFERENCE } from './cabinetMode.js';
 import { answerSources, askQuestion, discussionHistory, FEEDBACK_ENABLED, sendReaction } from './feedback.js';
 import { InsightIcon } from './insightIcons.jsx';
+import { QuotedExcerpt } from './insightReader.jsx';
+import { ExcerptAction, useExcerptSelection } from './excerptSelection.jsx';
+import { CitedText } from './sourceReferences.jsx';
+import { sourceUrl } from './sourceReferences.js';
 
 const REASONS = [['Не про нас', 'not_relevant'], ['Уже знали', 'already_known'],
   ['Старая новость', 'dislike'], ['Ошибка в фактах', 'incorrect']];
@@ -24,17 +28,22 @@ const errorText = error => error instanceof ApiError
       : `Сервис обсуждения: ${error.message}`
   : error.message === 'Failed to fetch' ? 'Не удалось связаться с сервисом обсуждения. Попробуйте ещё раз.' : error.message;
 
-const Citations = memo(function Citations({ record, item, insight, history }) {
+function messageSources(record, item, insight, history) {
+  const sources = answerSources(record, item, insight?.sources);
+  history.forEach(message => { sources[`user:${message.id}`] = { kind:'user', title:'Ваше уточнение',
+    text:[message.selected_text && `Фрагмент ${message.selected_source === 'answer' ? 'ответа агента' : 'инсайта'}: ${message.selected_text}`, message.comment].filter(Boolean).join('\n\n') }; });
+  return sources;
+}
+
+const Citations = memo(function Citations({ item, sources }) {
   const ids = item.analysis?.source_ids || [];
   if (!ids.length) return null;
-  const sources = answerSources(record, item, insight.sources);
-  history.forEach(message => { sources[`user:${message.id}`] = { title:'Комментарий пользователя', text:message.comment }; });
   return <details className="qa-sources"><summary>Источники ответа · {ids.length}</summary>
     <ul>{ids.map(id => {
       const s = sources[id];
-      return <li key={id}><b>{s?.title || (s?.kind === 'fact' ? 'Данные компании / расчёт' : id)}</b>
-        {s?.page && `, с. ${s.page}`}<p>{s?.text || s?.snippet || id}</p>
-        {s?.url && <a href={s.url} target="_blank" rel="noreferrer">Открыть источник</a>}</li>;
+      return <li key={id}><b>{s?.title || (s?.kind === 'fact' ? 'Данные компании / расчёт' : 'Источник недоступен')}</b>
+        {s?.page && `, с. ${s.page}`}<p>{s?.text || s?.snippet || 'Материал отсутствует в сохранённом снимке.'}</p>
+        {sourceUrl(s?.url) && <a href={sourceUrl(s.url)} target="_blank" rel="noreferrer">Открыть источник</a>}</li>;
     })}</ul>
   </details>;
 });
@@ -46,29 +55,36 @@ const messageTime = value => {
   return date && !isNaN(date) ? date.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) : '';
 };
 
-export const HistoryMessages = memo(function HistoryMessages({ history, record, insight, busy, onAsk }) {
-  return history.filter(isMessage).map(item => <article key={item.id} className="chat-turn" aria-label="Сообщение и ответ агента">
+export const HistoryMessages = memo(function HistoryMessages({ history, record, insight, busy, onAsk, agentLabel = 'Агент по инсайту' }) {
+  return history.filter(isMessage).map(item => {
+    const sources = messageSources(record, item, insight, history);
+    return <article key={item.id} className="chat-turn" aria-label="Сообщение и ответ агента">
     <div className="chat-message chat-message-user">
       <div className="chat-message-meta"><span>Вы</span><time dateTime={item.created_at}>{messageTime(item.created_at)}</time></div>
+      <QuotedExcerpt text={item.selected_text} source={item.selected_source} />
       <p>{item.comment || LABELS[item.kind] || item.kind}</p>
     </div>
     <div className="chat-message chat-message-agent">
       <span className="chat-message-avatar"><InsightIcon name="sparkle" size={17} /></span>
       <div className="chat-answer">
-        <div className="chat-message-meta"><span>Агент по инсайту</span><span className="chat-ai-label">AI</span></div>
+        <div className="chat-message-meta"><span>{agentLabel}</span><span className="chat-ai-label">AI</span></div>
         {item.analysis ? <>
-          {item.analysis.response.split(/\n{2,}/).map((paragraph, index) => <p key={index}>{paragraph}</p>)}
-          {item.analysis.needs_clarification && <p className="chat-clarification">{item.analysis.clarification_question}</p>}
-          <Citations {...{ record, item, insight, history }} />
+          <div className="chat-answer-copy" data-answer-excerpt="true">
+            {item.analysis.response.split(/\n{2,}/).map((paragraph, index) => <p key={index}><CitedText text={paragraph} sources={sources} /></p>)}
+            {item.analysis.needs_clarification && <p className="chat-clarification"><CitedText text={item.analysis.clarification_question} sources={sources} /></p>}
+          </div>
+          <Citations {...{ item, sources }} />
         </> : <><p className="chat-message-note">Сообщение сохранено, ответ пока не получен.</p>
           {item.kind === 'question' && <Button size={32} view="text" disabled={busy}
-            onClick={() => onAsk(item.comment, item.request_id)}>Повторить запрос ответа</Button>}</>}
+            onClick={() => onAsk(item.comment, item.request_id, item.selected_text || '', item.selected_source || 'insight')}>Повторить запрос ответа</Button>}</>}
       </div>
     </div>
-  </article>);
+  </article>;
+  });
 });
 
-export function InsightDiscussion({ company, insight, variant, active = true, feedbackTarget }) {
+export function InsightDiscussion({ company, insight, variant, active = true, feedbackTarget,
+  readerOpen, onToggleReader, selectedQuote, onClearQuote, onQuote }) {
   const [record, setRecord] = useState(null);
   const [history, setHistory] = useState([]);
   const [offset, setOffset] = useState(0);
@@ -82,11 +98,14 @@ export function InsightDiscussion({ company, insight, variant, active = true, fe
   const [reasons, setReasons] = useState(false);
   const alive = useRef(true);
   const body = useRef(null);
+  const panel = useRef(null);
   const input = useRef(null);
   const stickToBottom = useRef(true);
   const available = FEEDBACK_ENABLED && !!insight.pipeline_result;
   const workspace = variant === 'workspace';
   const hasMessages = history.some(isMessage);
+  const [answerSelection, clearAnswerSelection] = useExcerptSelection({ root:body, anchor:panel,
+    selector:'[data-answer-excerpt]', enabled:available && active && !busy && !loading && !!onQuote });
 
   useEffect(() => {
     if (active && (hasMessages || pending) && stickToBottom.current && body.current) body.current.scrollTop = body.current.scrollHeight;
@@ -96,6 +115,9 @@ export function InsightDiscussion({ company, insight, variant, active = true, fe
     input.current.style.height = 'auto';
     input.current.style.height = `${Math.min(input.current.scrollHeight, 140)}px`;
   }, [question, active]);
+  useEffect(() => {
+    if (selectedQuote && active && !busy && !loading && available) input.current?.focus();
+  }, [selectedQuote, active, busy, loading, available]);
 
   async function load(start = 0) {
     const data = await discussionHistory(company, insight, start);
@@ -114,21 +136,21 @@ export function InsightDiscussion({ company, insight, variant, active = true, fe
     return () => { alive.current = false; };
   }, [company, insight.id, insight.job_id, available]);
 
-  const ask = useCallback(async (text, requestId = crypto.randomUUID()) => {
+  const ask = useCallback(async (text, requestId = crypto.randomUUID(), selectedText = selectedQuote?.text || '', selectedSource = selectedQuote?.source || 'insight') => {
     if (!text || busy || !available) return;
     stickToBottom.current = true;
-    setBusy(true); setError(''); setQuestion(''); setPending({ text, requestId });
+    setBusy(true); setError(''); setQuestion(''); setPending({ text, requestId, selectedText, selectedSource }); onClearQuote?.();
     try {
       const answer = await askQuestion(company, insight, text, requestId, response => {
         if (alive.current) setPending(current => current?.requestId === requestId ? { ...current, response } : current);
-      });
+      }, selectedText, selectedSource);
       if (!alive.current) return;
       setHistory(items => merge(items, [answer]));
       setPending(null);
     } catch (e) {
-      if (alive.current) { setError(errorText(e)); setPending({ text, requestId, failed:true }); }
+      if (alive.current) { setError(errorText(e)); setPending({ text, requestId, selectedText, selectedSource, failed:true }); }
     } finally { if (alive.current) setBusy(false); }
-  }, [available, busy, company, insight]);
+  }, [available, busy, company, insight, selectedQuote, onClearQuote]);
 
   async function react(kind, emoji) {
     if (reacting || !available) return;
@@ -157,10 +179,13 @@ export function InsightDiscussion({ company, insight, variant, active = true, fe
       <Button key={kind} size={32} view="secondary" disabled={disabled} onClick={() => react(kind)}>{label}</Button>)}</div>}
     {rating && <p className="discussion-saved">Сохранено: {LABELS[rating.kind]}. Учтём при следующем анализе.</p>}
   </>;
-  return <section className={workspace ? 'discussion discussion-workspace' : 'layer discussion'} aria-label="Чат с агентом">
+  return <section ref={panel} className={workspace ? 'discussion discussion-workspace' : 'layer discussion'} aria-label="Чат с агентом">
     <header className="discussion-header">
       <span className="agent-avatar"><InsightIcon name="sparkle" size={21} /></span>
       <div><h3>Агент по инсайту</h3><p>Сценарии, расчёты и следующие шаги</p></div>
+      {onToggleReader && <button className="chat-reader-toggle" type="button" aria-expanded={readerOpen} onClick={onToggleReader}>
+        <InsightIcon name="document" size={17} /><span>Текст инсайта</span>
+      </button>}
       <span className={`agent-connection${record ? ' is-connected' : ''}`} role="status"><i />
         {record ? 'Контекст подключён' : loading ? 'Подключаем контекст' : available ? 'Нет подключения' : 'Только просмотр'}
       </span>
@@ -185,11 +210,11 @@ export function InsightDiscussion({ company, insight, variant, active = true, fe
         <HistoryMessages {...{ history, record, insight, busy }} onAsk={ask} />
         {more && <Button size={32} view="text" disabled={busy} onClick={() => load(offset).catch(e => setError(errorText(e)))}>Загрузить продолжение истории</Button>}
         {pending && !history.some(item => item.request_id === pending.requestId) && <article className="chat-turn">
-          <div className="chat-message chat-message-user"><div className="chat-message-meta"><span>Вы</span></div><p>{pending.text}</p></div>
+          <div className="chat-message chat-message-user"><div className="chat-message-meta"><span>Вы</span></div><QuotedExcerpt text={pending.selectedText} source={pending.selectedSource} /><p>{pending.text}</p></div>
           {!pending.failed && <div className="chat-message chat-message-agent">
             <span className="chat-message-avatar"><InsightIcon name="sparkle" size={17} /></span>
             <div className="chat-answer"><div className="chat-message-meta"><span>Агент по инсайту</span></div>
-              {pending.response ? <div className="chat-streaming-answer">{pending.response.split(/\n{2,}/).map((paragraph, index) => <p key={index}>{paragraph}</p>)}<span className="chat-streaming-caret" aria-hidden="true" /></div>
+              {pending.response ? <div className="chat-streaming-answer">{pending.response.split(/\n{2,}/).map((paragraph, index) => <p key={index}><CitedText text={paragraph} sources={answerSources(record, {}, insight.sources)} pending /></p>)}<span className="chat-streaming-caret" aria-hidden="true" /></div>
                 : <div className="thinking" role="status"><span className="dots"><i /><i /><i /></span>Изучаю вопрос и материалы…</div>}
             </div>
           </div>}
@@ -199,12 +224,16 @@ export function InsightDiscussion({ company, insight, variant, active = true, fe
     <div className="chat-compose-area">
       {error && <div className="chat-error"><p role="alert" className="discussion-error">{error}</p>
         {pending?.failed && <Button size={32} view="secondary" disabled={busy}
-          onClick={() => ask(pending.text, pending.requestId)}>Повторить запрос ответа</Button>}
+          onClick={() => ask(pending.text, pending.requestId, pending.selectedText || '', pending.selectedSource || 'insight')}>Повторить запрос ответа</Button>}
         {available && !loading && !record && <Button size={32} view="secondary"
           onClick={() => load().then(() => setError('')).catch(e => setError(errorText(e)))}>Повторить подключение</Button>}
       </div>}
+      {selectedQuote && <div className="chat-selected-quote" role="region" aria-label="Прикреплённый фрагмент">
+        <QuotedExcerpt text={selectedQuote.text} source={selectedQuote.source} />
+        <button type="button" className="workbench-icon-button" onClick={onClearQuote} aria-label="Убрать фрагмент из вопроса"><InsightIcon name="close" size={16} /></button>
+      </div>}
       <form className="chat-composer" onSubmit={event => { event.preventDefault(); ask(question.trim()); }}>
-        <textarea ref={input} rows={2} maxLength={2000} placeholder="Задайте вопрос об этом инсайте…" aria-label="Сообщение агенту"
+        <textarea ref={input} rows={2} maxLength={2000} placeholder={selectedQuote ? 'Что хотите уточнить об этом фрагменте?' : 'Задайте вопрос об этом инсайте…'} aria-label="Сообщение агенту"
           value={question} disabled={!available || loading || busy} onChange={event => setQuestion(event.target.value)}
           onKeyDown={event => {
             if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
@@ -218,5 +247,6 @@ export function InsightDiscussion({ company, insight, variant, active = true, fe
       </form>
       <div className="chat-compose-hint"><span>Enter — отправить<span className="chat-desktop-hint"> · Shift+Enter — новая строка</span></span><span>{question.length} / 2000</span></div>
     </div>
+    <ExcerptAction selection={answerSelection} onQuote={text => { onQuote({ text, source:'answer' }); clearAnswerSelection(); }} />
   </section>;
 }

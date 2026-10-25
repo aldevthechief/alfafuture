@@ -56,7 +56,7 @@
 .agent-invitation>button {display:flex;justify-content:space-between;align-items:center;gap:10px;width:100%;border-radius:10px;background:var(--agent-accent);color:var(--card);padding:12px;font-size:12px;font-weight:600;transition:filter .15s}
 .agent-invitation>button:hover {filter:brightness(1.12)}
 .chat-workspace {display:grid;grid-template-columns:minmax(0,1fr) 280px;height:100%;min-height:0}
-.discussion-workspace {display:flex;flex-direction:column;min-width:0;min-height:0;height:100%;overflow:hidden;background:var(--card)}
+.discussion-workspace {position:relative;display:flex;flex-direction:column;min-width:0;min-height:0;height:100%;overflow:hidden;background:var(--card)}
 .discussion-header {display:flex;align-items:center;gap:12px;padding:17px 26px;border-bottom:1px solid var(--line);flex-shrink:0}
 .discussion-header h3 {font-size:14px;font-weight:600;line-height:1.4}
 .discussion-header p {font-size:11.5px;color:var(--text-3);margin-top:3px}
@@ -91,6 +91,9 @@
 .chat-answer {flex:1;min-width:0;padding-top:2px}
 .chat-answer>p {margin-bottom:14px}
 .chat-answer>p:last-child {margin-bottom:0}
+.chat-answer-copy {user-select:text;cursor:text}
+.chat-answer-copy p {margin-bottom:14px}
+.chat-answer-copy p:last-child {margin-bottom:0}
 .chat-streaming-answer p {white-space:pre-wrap;overflow-wrap:anywhere;margin-bottom:14px}
 .chat-streaming-caret {display:inline-block;width:6px;height:16px;border-radius:2px;background:var(--agent-accent);animation:stream-caret .85s ease infinite alternate}
 @keyframes stream-caret {from{opacity:.2}to{opacity:1}}
@@ -206,3 +209,59 @@
   .insight-workbench,.workbench-tabs>button,.workbench-tabs>button::after,.chat-starters>button,.chat-composer,.chat-send {transition:none!important}
   .chat-starters>button:hover,.chat-send:hover:not(:disabled) {transform:none}
 }
+
+/* Read and quote the insight without leaving the conversation. */
+.chat-workspace.is-reading {grid-template-columns:minmax(0,var(--chat-share,58fr)) 12px minmax(0,var(--reader-share,42fr))}
+.chat-splitter {position:relative;display:grid;place-items:center;cursor:col-resize;touch-action:none;background:var(--bg);outline:none}
+.chat-splitter::before {content:'';position:absolute;top:0;bottom:0;left:5px;width:2px;background:var(--line);transition:background .15s}
+.chat-splitter>span {z-index:1;width:4px;height:35px;border-radius:4px;background:var(--text-3);opacity:.45}
+.chat-splitter:hover::before,.chat-splitter:focus-visible::before,.is-resizing .chat-splitter::before {background:var(--agent-accent)}
+.chat-splitter:hover>span,.chat-splitter:focus-visible>span,.is-resizing .chat-splitter>span {background:var(--agent-accent);opacity:1}
+.chat-splitter:focus-visible {box-shadow:inset 0 0 0 2px var(--agent-accent)}
+.insight-split-resizing,.insight-split-resizing * {cursor:col-resize!important;user-select:none!important;-webkit-user-select:none!important}
+.is-reading .insight-reader {border-left:0}
+.chat-reader-toggle {display:flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:9px;padding:8px 10px;font-size:11px;white-space:nowrap;color:var(--text-2);margin-left:auto}
+.chat-reader-toggle[aria-expanded="true"] {color:var(--agent-accent);background:var(--agent-tint);border-color:var(--agent-border)}
+.chat-reader-toggle:hover {border-color:var(--agent-border)}
+.chat-reader-toggle+.agent-connection {margin-left:0}
+.is-reading .agent-connection {font-size:0;gap:0}
+.insight-reader {position:relative;display:flex;flex-direction:column;min-width:0;min-height:0;overflow:hidden;background:var(--bg);border-left:1px solid var(--line);animation:workspace-panel-arrive .18s ease both}
+.insight-reader-header {display:flex;align-items:center;justify-content:space-between;gap:12px;flex-shrink:0;padding:13px 20px 8px}
+.insight-reader-header>span {display:flex;align-items:center;gap:8px;font-size:12px;font-weight:600;color:var(--text-2)}
+.insight-reader-header .workbench-icon-button {width:28px;height:28px;border-radius:8px}
+.insight-reader-modes {display:flex;gap:3px;background:var(--fill);border-radius:9px;padding:3px;margin:0 20px 12px;align-self:flex-start;flex-shrink:0}
+.insight-reader-modes button {padding:6px 12px;border-radius:7px;font-size:11px;color:var(--text-2)}
+.insight-reader-modes button[aria-pressed="true"] {background:var(--card);color:var(--text);box-shadow:0 1px 4px #0001}
+.insight-reader-scroll {flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable;padding:4px 22px 22px;overflow-wrap:anywhere}
+.insight-reader-copy {user-select:text;-webkit-user-select:text;cursor:text;font-size:12.5px;line-height:1.8}
+.insight-reader-copy ::selection {background:var(--agent-border);color:var(--text)}
+.insight-reader-copy h3 {font-size:16px;line-height:1.55;letter-spacing:-.25px;font-weight:600;margin:5px 0 15px}
+.insight-reader-lead {color:var(--text-2);margin-bottom:20px}
+.insight-reader-section {margin-top:22px}
+.insight-reader-section h4 {font-size:10px;line-height:1.5;text-transform:uppercase;letter-spacing:.6px;color:var(--text-3);font-weight:600;margin-bottom:10px}
+.insight-reader-section ul,.insight-reader-section ol {padding-left:18px;display:flex;flex-direction:column;gap:10px}
+.insight-reader-section p,.insight-reader-section li {white-space:pre-wrap}
+.insight-reader-hint {font-size:10px;line-height:1.5;color:var(--text-3);padding:11px 20px;border-top:1px solid var(--line);flex-shrink:0}
+.insight-reader-materials {flex-shrink:0;border-top:1px solid var(--line);background:var(--bg)}
+.insight-reader-materials .chat-context-sources {margin:0;padding:0;border:0}
+.insight-reader-materials summary {padding:12px 20px;color:var(--text);font-size:11px;font-weight:550}
+.insight-reader-materials .side-card {max-height:170px;overflow-y:auto;overscroll-behavior:contain;padding:0 20px 14px}
+.insight-selection-action {position:absolute;left:16px;right:16px;display:flex;justify-content:center;pointer-events:none;z-index:2}
+.insight-selection-action button {display:flex;align-items:center;gap:8px;pointer-events:auto;padding:10px 15px;border:1px solid var(--agent-border);border-radius:11px;background:var(--agent-accent);color:var(--card);font-size:12px;font-weight:550;box-shadow:0 5px 25px #0003}
+.insight-selection-action button:disabled {background:var(--card);color:var(--text-2);cursor:default}
+.chat-quoted-excerpt {margin:0 0 10px;padding:8px 11px;border-left:3px solid var(--agent-accent);border-radius:0 7px 7px 0;background:color-mix(in srgb,var(--agent-accent) 7%,transparent);max-height:130px;overflow:auto;overscroll-behavior:contain}
+.chat-quoted-excerpt>span {display:block;font-size:9px;line-height:1.5;color:var(--agent-accent);font-weight:600;margin-bottom:4px}
+.chat-quoted-excerpt>p {font-size:12px;line-height:1.65;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--text-2)}
+.chat-selected-quote {display:flex;align-items:flex-start;gap:8px;margin:0 2px 9px;animation:workspace-panel-arrive .15s ease both}
+.chat-selected-quote .chat-quoted-excerpt {flex:1;min-width:0;margin:0;max-height:95px}
+.chat-selected-quote .workbench-icon-button {width:26px;height:26px;flex:0 0 26px}
+@media(max-width:1050px) {.is-reading .discussion-header{padding-left:16px;padding-right:16px;gap:9px}.is-reading .discussion-header p{display:none}}
+@media(max-width:900px) {
+  .chat-workspace.is-reading {grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(280px,1fr) minmax(230px,.9fr);overflow-y:auto}
+  .chat-splitter {display:none}
+  .insight-reader-materials .side-card {max-height:105px}
+  .insight-reader {border-left:0}
+  .insight-reader-header {padding-top:12px}
+}
+@media(max-width:600px) {.chat-reader-toggle{padding:7px;font-size:10px;gap:4px}.chat-reader-toggle>svg{width:14px;height:14px}.chat-reader-toggle+.agent-connection{display:none}}
+@media(prefers-reduced-motion:reduce) {.insight-reader,.chat-selected-quote{animation:none}}

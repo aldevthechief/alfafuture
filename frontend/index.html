@@ -366,11 +366,7 @@ body.cabinet-locked .app,body.cabinet-locked>.fab,body.cabinet-locked>.chat{disp
 
 <!-- chat entry point (part of SharedUI) -->
 <button class="fab" id="fab" aria-label="Открыть чат с банком" aria-expanded="false"><svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor"><path d="M4 4h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-7l-5 4v-4H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"/><path d="M7 9h10v2H7zm0 3.5h6v2H7z" fill="#1C1C1E"/></svg></button>
-<div class="chat" id="chat" role="dialog" aria-label="Чат с банком">
-  <div class="chat-head"><div><b>Чат с банком</b><small>Ответим в течение нескольких минут</small></div><button id="chatClose" aria-label="Закрыть чат"><svg width="20" height="20" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg></button></div>
-  <div id="chatBody"><div class="bubble">Здравствуйте! Чем можем помочь?</div></div>
-  <form class="chat-input" id="chatForm"><input id="chatInput" placeholder="Сообщение" aria-label="Сообщение"><button class="btn btn-red" style="height:44px;padding:0 16px">→</button></form>
-</div>
+<div id="company-chat-root"></div>
 
 <div id="insights-root"></div>
 <script type="module" src="/src/main.jsx"></script>
@@ -481,16 +477,7 @@ $('#copyReq').addEventListener('click', () => copy(`${current.name}, ИНН ${cu
 $('#burger').addEventListener('click', () => document.body.classList.add('side-open'));
 $('#sideOverlay').addEventListener('click', () => document.body.classList.remove('side-open'));
 
-const toggleChat = open => { $('#chat').classList.toggle('open', open); $('#fab').setAttribute('aria-expanded', open); if (open) $('#chatInput').focus(); };
-$('#fab').addEventListener('click', () => toggleChat(!$('#chat').classList.contains('open')));
-$('#chatClose').addEventListener('click', () => toggleChat(false));
-$('#chatForm').addEventListener('submit', e => {
-  e.preventDefault();
-  const v = $('#chatInput').value.trim();
-  if (!v) return;
-  $('#chatBody').insertAdjacentHTML('beforeend', `<div class="bubble" style="align-self:flex-end;background:var(--fill);border-radius:14px 14px 4px 14px">${esc(v)}</div>`);
-  $('#chatInput').value = '';
-});
+$('#fab').addEventListener('click', () => window.dispatchEvent(new Event('cabinet:chat')));
 
 renderHome(); renderCompany();
 </script>

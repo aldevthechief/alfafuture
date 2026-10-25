@@ -1,0 +1,31 @@
+/* Original cabinet chat proportions, with the isolated conversation behind them. */
+.company-bank-chat{position:fixed;right:24px;bottom:96px;width:380px;max-width:calc(100vw - 32px);height:520px;max-height:calc(100dvh - 120px);z-index:55;border:0;border-radius:20px;box-shadow:0 16px 48px rgba(11,31,53,.22);background:var(--card);--agent-accent:var(--text);--agent-user-bg:var(--fill);--agent-tint:var(--bg);--agent-border:var(--line);animation:company-chat-arrive .16s ease}
+.company-bank-chat[hidden]{display:none}
+.company-bank-chat .discussion-header{padding:16px 18px;gap:8px;align-items:flex-start}
+.company-bank-chat .discussion-header>div{flex:1;min-width:0}
+.company-bank-chat .discussion-header h3{font-size:16px;font-weight:600}
+.company-bank-chat .discussion-header p{font-size:12px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;margin-top:3px}
+.company-bank-chat .chat-ai-label{font-size:10px;color:var(--text-3)}
+.company-bank-chat .chat-transcript-inner{padding:18px}
+.company-chat-welcome{background:var(--bg);border-radius:14px 14px 14px 4px;padding:10px 12px;font-size:14px;line-height:1.5;max-width:88%}
+.company-bank-chat .chat-turn{margin-bottom:18px;animation:none}
+.company-bank-chat .chat-message{font-size:13px;line-height:1.6}
+.company-bank-chat .chat-message-avatar{display:none}
+.company-bank-chat .chat-message-user{background:var(--fill);border:0;border-radius:14px 14px 4px 14px;padding:10px 12px;margin-bottom:12px;max-width:88%}
+.company-bank-chat .chat-message-agent{background:var(--bg);border-radius:14px 14px 14px 4px;padding:10px 12px;max-width:94%}
+.company-bank-chat .chat-message-meta{font-size:10px;margin-bottom:5px}
+.company-bank-chat .chat-answer-copy p{margin-bottom:10px}
+.company-bank-chat .chat-answer-copy p:last-child{margin-bottom:0}
+.company-bank-chat .chat-answer .qa-sources{font-size:11px;padding:7px 9px;margin-top:10px}
+.company-bank-chat .chat-compose-area{padding:12px;border-top:1px solid var(--line)}
+.company-bank-chat .chat-composer{padding:0;gap:8px;background:none;border:0;border-radius:0;align-items:center;box-shadow:none}
+.company-bank-chat .chat-composer textarea{height:44px;min-height:44px;max-height:90px;border-radius:12px;background:var(--bg);padding:12px 14px;font-size:14px;line-height:20px}
+.company-bank-chat .chat-composer textarea:focus-visible{outline:2px solid var(--blue);outline-offset:-2px}
+.company-bank-chat .chat-send{width:44px;height:44px;flex-basis:44px;background:var(--red);color:#fff;border-radius:12px;transition:background .12s}
+.company-bank-chat .chat-send:hover:not(:disabled){transform:none;filter:brightness(.95)}
+.company-bank-chat .chat-send:disabled{background:var(--fill);color:var(--text-3)}
+.company-bank-chat .chat-error{font-size:12px}
+.company-bank-chat .source-reference{max-width:180px}
+@keyframes company-chat-arrive{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:none}}
+@media(max-width:440px){.company-bank-chat{right:16px;bottom:96px}}
+@media(prefers-reduced-motion:reduce){.company-bank-chat{animation:none}.company-bank-chat .chat-send{transition:none}}
