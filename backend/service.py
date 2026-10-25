@@ -27,6 +27,8 @@ class Service:
         self.models_factory=models_factory
         self.catalog=Catalog(self.root/'bank',processor)
         self.agents=Jobs(self.root/'analyses',agent_workers)
+        from backend.calendar_index import maybe_index_job
+        self.agents.on_finish=maybe_index_job  # calendar SQLite index per finished analysis; never breaks the pool
         self.pdfs=Jobs(self.root/'pdf_jobs',pdf_workers)
         self._checkpointing=checkpointing
         self._checkpointer=None

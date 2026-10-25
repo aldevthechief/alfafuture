@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Annotated
 
 import pymupdf
-from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, Header, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
@@ -138,6 +138,15 @@ def create_app(service=None, cors_origins=None):
         analyses = [svc().agents.get(i, project=project) for i in list(svc().agents.items)]
         return dict(analyses=[job for job in analyses if job['request'].get('user_id') in (None, x_user_id)],
                     reports=[svc().pdfs.get(i, project=project) for i in list(svc().pdfs.items)])
+
+    @app.get('/v1/calendar',tags=['calendar'],summary='Dated insight events by range, from the small SQLite index')
+    def calendar(date_from: str = Query(alias='from'), date_to: str = Query(alias='to'),
+                 company_id: str | None = None):
+        from backend.calendar_index import events_between
+        try:
+            return dict(events=events_between(date_from, date_to, company_id))
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
 
     @app.get('/v1/reports',tags=['reports'],summary='Atomically published report versions')
     def reports():

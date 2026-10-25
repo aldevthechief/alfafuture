@@ -179,8 +179,8 @@ body.cabinet-locked .app,body.cabinet-locked>.fab,body.cabinet-locked>.chat{disp
 .mount-empty{border:1.5px dashed #7FB0FF;background:#EEF4FF;border-radius:12px;min-height:372px;display:grid;place-items:center;color:var(--blue);text-align:center;padding:20px}
 
 /* ---------- chat ---------- */
-.fab{position:fixed;right:24px;bottom:24px;width:60px;height:60px;border-radius:50%;background:#1C1C1E;color:#fff;display:grid;place-items:center;box-shadow:0 6px 20px rgba(0,0,0,.25);z-index:50}
-.fab:hover{background:#000}
+.fab{position:fixed;right:24px;bottom:24px;width:60px;height:60px;border-radius:50%;background:var(--red);color:#fff;display:grid;place-items:center;box-shadow:0 8px 24px rgba(239,49,36,.38);z-index:50;transition:background .15s,transform .15s}
+.fab:hover{background:var(--red-dark);transform:translateY(-1px)}
 .chat{position:fixed;right:24px;bottom:96px;width:380px;max-width:calc(100vw - 32px);height:520px;max-height:calc(100vh - 120px);background:var(--card);border-radius:20px;box-shadow:0 16px 48px rgba(11,31,53,.22);display:none;flex-direction:column;overflow:hidden;z-index:55}
 .chat.open{display:flex}
 .chat-head{padding:16px 18px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center}
@@ -190,6 +190,39 @@ body.cabinet-locked .app,body.cabinet-locked>.fab,body.cabinet-locked>.chat{disp
 .bubble{background:var(--bg);border-radius:14px 14px 14px 4px;padding:10px 12px;font-size:14px;max-width:88%}
 .chat-input{display:flex;gap:8px;padding:12px;border-top:1px solid var(--line)}
 .chat-input input{flex:1;height:44px;border-radius:12px;border:0;background:var(--bg);padding:0 14px;outline:none}
+
+/* ---------- calendar ---------- */
+.cal-wrap{max-width:880px}
+.cal-card{padding:22px 26px 26px}
+.cal-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px}
+.cal-title{font-size:19px;font-weight:700}
+.cal-nav{display:flex;gap:6px}
+.cal-nav button{height:38px;min-width:38px;padding:0 10px;border-radius:10px;background:var(--bg);display:grid;place-items:center;color:var(--text)}
+.cal-nav button:hover{background:var(--fill-hover)}
+.cal-nav .cal-today{font-size:14px;font-weight:500}
+.cal-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px}
+.cal-dow{text-align:center;font-size:11.5px;letter-spacing:1px;text-transform:uppercase;color:var(--text-3);padding:4px 0 10px}
+.cal-day{height:48px;border-radius:12px;display:flex;flex-direction:column;align-items:center;justify-content:center;font-size:14.5px;font-variant-numeric:tabular-nums;gap:3px}
+.cal-day:hover{background:var(--fill)}
+.cal-day.today{box-shadow:inset 0 0 0 2px var(--red);color:var(--red);font-weight:600}
+.cal-day.sel{background:var(--red);color:#fff}
+.cal-day.sel:hover{background:var(--red-dark)}
+.cal-dot{width:5px;height:5px;border-radius:50%;background:var(--red)}
+.cal-day.sel .cal-dot{background:#fff}
+.cal-events{margin-top:18px;border-top:1px solid var(--line);padding-top:16px;display:flex;flex-direction:column;gap:10px}
+.cal-events h3{font-size:15px;font-weight:600;margin-bottom:2px}
+.cal-ev{display:flex;gap:14px;align-items:flex-start;background:var(--bg);border-radius:12px;padding:12px 14px;text-align:left}
+.cal-ev .ev-date{flex:0 0 auto;text-align:center;min-width:44px;border-radius:10px;background:var(--card);padding:6px 8px;line-height:1.05}
+.cal-ev .ev-date b{display:block;font-size:18px;font-weight:700;color:var(--red)}
+.cal-ev .ev-date span{font-size:11px;color:var(--text-2);text-transform:capitalize}
+.cal-ev .ev-body{min-width:0;display:flex;flex-direction:column;gap:6px}
+.cal-ev .ev-title{font-size:14.5px;font-weight:500;line-height:1.35}
+.cal-ev .ev-meta{display:flex;flex-wrap:wrap;gap:6px}
+.ev-chip{font-size:11.5px;font-weight:600;letter-spacing:.3px;padding:3px 8px;border-radius:6px;background:var(--card);color:var(--text-2)}
+.ev-chip.st-high{background:var(--red);color:#fff}
+.ev-chip.st-mid{background:var(--fill);color:var(--text)}
+.cal-empty{color:var(--text-3);font-size:14px;padding:8px 2px}
+@media (max-width:600px){.cal-card{padding:16px}.cal-day{height:42px;font-size:13.5px}}
 
 .side-overlay{display:none}
 
@@ -273,7 +306,7 @@ body.cabinet-locked .app,body.cabinet-locked>.fab,body.cabinet-locked>.chat{disp
       <button class="top-btn burger" id="burger" aria-label="Меню"><svg width="22" height="22" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
       <button class="top-btn top-hide" data-view="stub" data-title="Поиск"><svg width="20" height="20" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5" fill="none" stroke="currentColor" stroke-width="2.4"/><path d="m15.5 15.5 5 5" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/></svg>Поиск</button>
       <span class="top-sep"></span>
-      <button class="top-btn top-hide" aria-label="Календарь" data-view="stub" data-title="Календарь"><svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M7 2h2v2h6V2h2v2h1a3 3 0 0 1 3 3v12a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3V7a3 3 0 0 1 3-3h1z"/><path d="M5 9h14v2H5z" fill="#fff"/><path d="M7 13h2v2H7zm4 0h2v2h-2zm4 0h2v2h-2zm-8 3.5h2v2H7zm4 0h2v2h-2z" fill="#fff"/></svg></button>
+      <button class="top-btn top-hide" aria-label="Календарь" data-view="calendar" data-title="Календарь"><svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M7 2h2v2h6V2h2v2h1a3 3 0 0 1 3 3v12a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3V7a3 3 0 0 1 3-3h1z"/><path d="M5 9h14v2H5z" fill="#fff"/><path d="M7 13h2v2H7zm4 0h2v2h-2zm4 0h2v2h-2zm-8 3.5h2v2H7zm4 0h2v2h-2z" fill="#fff"/></svg></button>
       <button class="top-btn top-hide" aria-label="Письма" data-view="stub" data-title="Письма"><svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M2 6.5A2.5 2.5 0 0 1 4.5 4h15A2.5 2.5 0 0 1 22 6.5v.3l-10 6-10-6z"/><path d="M2 9.2l10 6 10-6v8.3a2.5 2.5 0 0 1-2.5 2.5h-15A2.5 2.5 0 0 1 2 17.5z"/></svg></button>
       <button class="top-btn" aria-label="Уведомления" data-view="stub" data-title="Уведомления"><svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2.5a6.5 6.5 0 0 0-6.5 6.5v4.2L3.6 16.6c-.4.7.1 1.4.9 1.4h15c.8 0 1.3-.7.9-1.4l-1.9-3.4V9A6.5 6.5 0 0 0 12 2.5zM9.4 19.5a2.7 2.7 0 0 0 5.2 0z"/></svg></button>
       <span class="top-sep"></span>
@@ -360,12 +393,31 @@ body.cabinet-locked .app,body.cabinet-locked>.fab,body.cabinet-locked>.chat{disp
         <p class="h-sub">Раздел интернет-банка недоступен в демо-версии.</p>
         <div class="mount"><div class="mount-empty">Content</div></div>
       </section>
+
+      <!-- ===== CALENDAR ===== -->
+      <section class="view" id="view-calendar">
+        <h1 class="h-sys">Календарь</h1>
+        <p class="h-sub">События из готовых анализов. Точками отмечены даты, по которым в индексе есть записи.</p>
+        <div class="card cal-card cal-wrap">
+          <div class="cal-head">
+            <div class="cal-title" id="calTitle"></div>
+            <div class="cal-nav">
+              <button id="calPrev" aria-label="Предыдущий месяц"><svg width="18" height="18" viewBox="0 0 24 24"><path d="m15 5-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg></button>
+              <button class="cal-today" id="calToday">Сегодня</button>
+              <button id="calNext" aria-label="Следующий месяц"><svg width="18" height="18" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg></button>
+            </div>
+          </div>
+          <div class="cal-grid" id="calDow"></div>
+          <div class="cal-grid" id="calDays" role="grid"></div>
+          <div class="cal-events" id="calEvents"></div>
+        </div>
+      </section>
     </main>
   </div>
 </div>
 
 <!-- chat entry point (part of SharedUI) -->
-<button class="fab" id="fab" aria-label="Открыть чат с банком" aria-expanded="false"><svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor"><path d="M4 4h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-7l-5 4v-4H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"/><path d="M7 9h10v2H7zm0 3.5h6v2H7z" fill="#1C1C1E"/></svg></button>
+<button class="fab" id="fab" aria-label="Открыть чат с банком" aria-expanded="false"><svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor"><path d="M4 4h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-7l-5 4v-4H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"/><path d="M7 9h10v2H7zm0 3.5h6v2H7z" fill="#EF3124"/></svg></button>
 <div id="company-chat-root"></div>
 
 <div id="insights-root"></div>
@@ -468,6 +520,7 @@ window.setCabinetContext = session => {
   role = session.role;
   renderCompany();
   showView('home');
+  calLoadMonth();
 };
 
 const copy = t => navigator.clipboard?.writeText(t).catch(() => {});
@@ -478,6 +531,80 @@ $('#burger').addEventListener('click', () => document.body.classList.add('side-o
 $('#sideOverlay').addEventListener('click', () => document.body.classList.remove('side-open'));
 
 $('#fab').addEventListener('click', () => window.dispatchEvent(new Event('cabinet:chat')));
+
+// ---------- calendar: GET /v1/calendar by date range (SQLite index on the backend) ----------
+const CAL_IMPACT = {high:['Высокое влияние','st-high'], mid:['Среднее влияние','st-mid'], low:['Низкое влияние','st-mid']};
+const CAL_MONTHS = ['января','февраля','марта','апреля','мая','июня','июля','августа','сентября','октября','ноября','декабря'];
+const CAL_MONTHS_NOM = ['Январь','Февраль','Март','Апрель','Май','Июнь','Июль','Август','Сентябрь','Октябрь','Ноябрь','Декабрь'];
+let calCursor = new Date(), calSelected = null, calMonthEvents = [], calFailed = false;
+
+const calKey = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const calByDate = () => {
+  const map = {};
+  for (const e of calMonthEvents) (map[e.event_date] = map[e.event_date] || []).push(e);
+  return map;
+};
+
+async function calLoadMonth() {
+  const y = calCursor.getFullYear(), m = calCursor.getMonth();
+  const last = new Date(y, m + 1, 0).getDate();
+  const from = calKey(new Date(y, m, 1)), to = calKey(new Date(y, m, last));
+  const company = window.cabinetSession?.company_id;
+  const url = `/v1/calendar?from=${from}&to=${to}${company ? `&company_id=${encodeURIComponent(company)}` : ''}`;
+  calMonthEvents = []; calFailed = false;
+  try {
+    const r = await fetch(url);
+    if (!r.ok) throw new Error(r.status);
+    calMonthEvents = (await r.json()).events || [];
+  } catch { calFailed = true; }
+  calRender();
+}
+
+function calRender() {
+  const map = calByDate(), today = calKey(new Date());
+  const y = calCursor.getFullYear(), m = calCursor.getMonth();
+  $('#calTitle').textContent = `${CAL_MONTHS_NOM[m]} ${y}`;
+  $('#calDow').innerHTML = ['пн','вт','ср','чт','пт','сб','вс'].map(d => `<div class="cal-dow">${d}</div>`).join('');
+  const shift = (new Date(y, m, 1).getDay() + 6) % 7, days = new Date(y, m + 1, 0).getDate();
+  let html = '';
+  for (let i = 0; i < shift; i++) html += '<div></div>';
+  for (let d = 1; d <= days; d++) {
+    const key = calKey(new Date(y, m, d)), has = !!map[key];
+    html += `<button class="cal-day${key === today ? ' today' : ''}${key === calSelected ? ' sel' : ''}" data-date="${key}"
+      aria-label="${d} ${CAL_MONTHS[m]}${has ? ', есть события' : ''}">${d}${has ? '<span class="cal-dot"></span>' : ''}</button>`;
+  }
+  $('#calDays').innerHTML = html;
+  const list = calSelected ? (map[calSelected] || []) : [];
+  const [sy, sm, sd] = (calSelected || today).split('-').map(Number);
+  const head = `<h3>${sd} ${CAL_MONTHS[sm - 1]} ${sy}</h3>`;
+  $('#calEvents').innerHTML = calFailed
+    ? head + '<div class="cal-empty">Календарь событий недоступен без сервера анализа.</div>'
+    : list.length ? head + list.map(e => {
+        const [impactLabel, impactClass] = CAL_IMPACT[e.impact_level] || ['', ''];
+        return `<div class="cal-ev">
+          <div class="ev-date"><b>${sd}</b><span>${CAL_MONTHS[sm - 1]}</span></div>
+          <div class="ev-body">
+            <div class="ev-title">${esc(e.title)}</div>
+            <div class="ev-meta">
+              <span class="ev-chip">${esc(e.company_id)} · ${esc(e.role)}</span>
+              ${impactLabel ? `<span class="ev-chip ${impactClass}">${impactLabel}</span>` : ''}
+              ${e.channel ? `<span class="ev-chip">${esc(e.channel)}</span>` : ''}
+            </div>
+          </div></div>`; }).join('')
+    : head + (calSelected ? '<div class="cal-empty">На эту дату событий нет.</div>'
+        : '<div class="cal-empty">Выберите дату с красной точкой, чтобы увидеть события.</div>');
+}
+
+$('#calPrev').addEventListener('click', () => { calCursor.setMonth(calCursor.getMonth() - 1); calSelected = null; calLoadMonth(); });
+$('#calNext').addEventListener('click', () => { calCursor.setMonth(calCursor.getMonth() + 1); calSelected = null; calLoadMonth(); });
+$('#calToday').addEventListener('click', () => { calCursor = new Date(); calSelected = null; calLoadMonth(); });
+$('#calDays').addEventListener('click', e => {
+  const b = e.target.closest('[data-date]');
+  if (!b) return;
+  calSelected = calSelected === b.dataset.date ? null : b.dataset.date;
+  calRender();
+});
+calLoadMonth();
 
 renderHome(); renderCompany();
 </script>

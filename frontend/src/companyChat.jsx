@@ -87,6 +87,7 @@ export default function CompanyChat({ company, role, name, roleTitle, open, onCl
   return createPortal(<section ref={panel} className="company-bank-chat discussion-workspace" role="dialog"
     aria-label="Чат с банком" hidden={!open} onKeyDown={event => { if (event.key === 'Escape') { event.stopPropagation(); onClose(); } }}>
     <header className="discussion-header">
+      <span className="chat-bank-ava" aria-hidden="true"><svg width="16" height="19" viewBox="0 0 22 26" fill="currentColor"><path d="M11 0 2.6 19.5h4.3l1.6-4.1h5l1.6 4.1h4.3L11 0zm-1.2 11.9L11 8.5l1.2 3.4z"/><rect x="2.6" y="22" width="16.8" height="3.2" rx="1.6"/></svg></span>
       <div><h3>Чат с банком <span className="chat-ai-label">AI</span></h3><p>{name} · {roleTitle}</p></div>
       <button type="button" className="workbench-icon-button" aria-label="Закрыть чат с банком" onClick={onClose}><InsightIcon name="close" size={19} /></button>
     </header>

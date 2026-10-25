@@ -255,9 +255,7 @@ data/analytics_agent/
 # macOS
 .DS_Store
 
-/data/news/events.parquet
-/data/news/index.jsonl
-/data/news/news.jsonl
+data/llm_cache/llm.jsonl
 # retrieval v2: vector cache, factory specs (quote case facts), eval output
 data/retrieval_v2/
 

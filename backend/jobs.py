@@ -18,6 +18,7 @@ class Jobs:
         self.pool=ThreadPoolExecutor(workers, thread_name_prefix=self.root.name)
         self.slots=threading.BoundedSemaphore(capacity)
         self.lock=threading.RLock(); self.items={}; self.futures={}
+        self.on_finish=None  # optional callback(item) after a job reaches a final state; never raises
         for path in self.root.glob('*.json'):
             item=json.loads(path.read_text(encoding='utf-8'))
             if item['status'] in ('queued','running'):
@@ -54,6 +55,9 @@ class Jobs:
                     with self.lock:
                         item['finished_at']=datetime.now(timezone.utc).isoformat(); self._save(item)
                 finally:
+                    if self.on_finish is not None:
+                        try: self.on_finish(item)
+                        except Exception as exc: print(f'{self.root.name}: on_finish failed for {item["id"]}: {exc}')
                     self.slots.release()
         try:
             self.futures[item['id']]=self.pool.submit(run)

@@ -49,7 +49,7 @@ def export(name: str, path: Path) -> None:
 if '--export' in sys.argv:
     export('llm', LLM)
     for key in client.scan_iter('alfa:*'):
-        if key != 'alfa:llm':
+        if key != 'alfa:llm' and client.type(key) == 'hash':  # feedback-api keeps per-answer string keys, not named caches
             export(key.split(':', 1)[1], NAMED / f"{key.split(':', 1)[1]}.jsonl")
     with open(LLM, 'rb') as src, gzip.open(LLM.with_suffix('.jsonl.gz'), 'wb') as dst:
         dst.write(src.read())
