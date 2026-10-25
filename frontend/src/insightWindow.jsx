@@ -74,6 +74,8 @@ const Sources = memo(function Sources({ ids, sources }) {
 });
 
 export function InsightWindow({ insight: i, compact, sources = {}, company, onClose, onHide }) {
+  const id = useId();
+  const [expanded, setExpanded] = useState(false);
   const [detail, setDetail] = useState(i.preview ? null : i);
   const [error, setError] = useState('');
   const [retry, setRetry] = useState(0);
@@ -84,26 +86,36 @@ export function InsightWindow({ insight: i, compact, sources = {}, company, onCl
       .catch(err => { if (active) setError(err.message); });
     return () => { active = false; };
   }, [i, company, retry]);
-  if (!detail) return <Modal open onClose={onClose} size={1140} hasCloser transitionProps={NO_TRANSITION}
-    className="insight-workbench" wrapperClassName="workbench-overlay" contentProps={{ className: 'workbench-frame' }}
-    wrapperProps={{ 'aria-modal': true, 'aria-label': 'Загрузка инсайта' }}>
-    <Modal.Header hasCloser sticky />
-    <Modal.Content><div className={`iwin insight-detail-tone-${insightSignal(i).tone}`}>
-      <div className="ic-tags"><SignalBadge insight={i} /></div>
-      <Typography.Title font="system" tag="h2" view="medium" weight="bold">{i.title}</Typography.Title>
+  const title = compact?.title || detail?.title || i.title;
+  // Keep one portal, backdrop and focus lock from loading through the complete workspace.
+  return <Modal open onClose={onClose} size={1140} transitionProps={NO_TRANSITION}
+    className={`insight-workbench${expanded ? ' workbench-expanded' : ''}`} wrapperClassName={`workbench-overlay${expanded ? ' is-expanded' : ''}`}
+    contentProps={{ className:'workbench-frame' }} wrapperProps={{ 'aria-modal':true, 'aria-labelledby':`${id}-title` }}>
+    <header className="workbench-header">
+      <div className="workbench-heading">
+        <div className="workbench-eyebrow"><span className="workbench-mark"><InsightIcon name="sparkle" size={14} /></span>
+          Персональный инсайт<span>·</span>{i.channel}<span>·</span>{day(i.published)}</div>
+        <h2 id={`${id}-title`} title={title}>{title}</h2>
+      </div>
+      <div className="workbench-controls">
+        <button className="workbench-icon-button workbench-expand" type="button" onClick={() => setExpanded(value => !value)}
+          aria-label={expanded ? 'Уменьшить окно' : 'Развернуть окно'} title={expanded ? 'Уменьшить окно' : 'Развернуть окно'}>
+          <InsightIcon name={expanded ? 'collapse' : 'expand'} /></button>
+        <button className="workbench-icon-button" type="button" onClick={onClose} aria-label="Закрыть инсайт" title="Закрыть · Esc">
+          <InsightIcon name="close" /></button>
+      </div>
+    </header>
+    {detail ? <InsightDetails id={id} insight={detail} compact={compact} sources={detail.sources || sources}
+      company={company} onHide={onHide} /> : <div className="workbench-loading" aria-busy={!error}>
       {error ? <><p role="alert">Не удалось загрузить инсайт: {error}</p>
         <Button size={40} view="secondary" onClick={() => setRetry(n => n + 1)}>Повторить</Button></>
         : <p role="status">Загружаем материалы инсайта…</p>}
-    </div></Modal.Content>
+    </div>}
   </Modal>;
-  return <InsightDetails insight={detail} compact={compact} sources={detail.sources || sources}
-    company={company} onClose={onClose} onHide={onHide} />;
 }
 
-function InsightDetails({ insight: i, compact, sources, company, onClose, onHide }) {
-  const id = useId();
+function InsightDetails({ id, insight: i, compact, sources, company, onHide }) {
   const [tab, setTab] = useState('overview');
-  const [expanded, setExpanded] = useState(false);
   const [readerOpen, setReaderOpen] = useState(true);
   const [selectedQuote, setSelectedQuote] = useState(null);
   const changeTab = next => {
@@ -115,26 +127,7 @@ function InsightDetails({ insight: i, compact, sources, company, onClose, onHide
   const [color, conf] = CONFIDENCE[i.confidence] || CONFIDENCE.low;
   const used = useMemo(() => [...new Set([...v.facts, ...v.why, ...v.risks, ...v.opportunities, ...v.bank_view, ...(i.hypotheses || [])].flatMap(x => x.sources || []))], [v, i]);
 
-  return <Modal open onClose={onClose} size={1140} transitionProps={NO_TRANSITION}
-    className={`insight-workbench${expanded ? ' workbench-expanded' : ''}`} wrapperClassName={`workbench-overlay${expanded ? ' is-expanded' : ''}`}
-    contentProps={{ className: 'workbench-frame' }}
-    wrapperProps={{ 'aria-modal': true, 'aria-labelledby': `${id}-title` }}>
-    <header className="workbench-header">
-      <div className="workbench-heading">
-        <div className="workbench-eyebrow"><span className="workbench-mark"><InsightIcon name="sparkle" size={14} /></span>
-          Персональный инсайт<span>·</span>{i.channel}<span>·</span>{day(i.published)}</div>
-        <h2 id={`${id}-title`} title={v.title}>{v.title}</h2>
-      </div>
-      <div className="workbench-controls">
-        <button className="workbench-icon-button workbench-expand" type="button" onClick={() => setExpanded(value => !value)}
-          aria-label={expanded ? 'Уменьшить окно' : 'Развернуть окно'} title={expanded ? 'Уменьшить окно' : 'Развернуть окно'}>
-          <InsightIcon name={expanded ? 'collapse' : 'expand'} />
-        </button>
-        <button className="workbench-icon-button" type="button" onClick={onClose} aria-label="Закрыть инсайт" title="Закрыть · Esc">
-          <InsightIcon name="close" />
-        </button>
-      </div>
-    </header>
+  return <>
     <InsightTabs id={id} tab={tab} onChange={changeTab} />
     <div className="workbench-panels">
       <section className="workbench-panel workbench-overview" id={`${id}-overview-panel`} role="tabpanel"
@@ -191,7 +184,7 @@ function InsightDetails({ insight: i, compact, sources, company, onClose, onHide
       <div className="workbench-feedback" ref={setFeedbackTarget} />
       <Button size={32} view="text" onClick={() => onHide(i.id)}>Скрыть инсайт</Button>
     </footer>
-  </Modal>;
+  </>;
 }
 
 const InsightBody = memo(function InsightBody({ insight: i, v, compact, sources }) {

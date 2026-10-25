@@ -12,6 +12,7 @@
   --agent-user-bg: #232f45;
 }
 .workbench-overlay {padding:24px}
+.workbench-loading {padding:24px 28px;color:var(--text-2);display:flex;flex-direction:column;align-items:flex-start;gap:16px}
 .workbench-overlay .insight-workbench {
   width:min(1320px,calc(100vw - 48px));height:min(820px,calc(100dvh - 48px));max-width:100%;
   border:1px solid var(--line);border-radius:24px;background:var(--card);overflow:hidden;
