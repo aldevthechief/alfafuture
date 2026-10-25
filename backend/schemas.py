@@ -9,9 +9,9 @@ class AnalysisRequest(BaseModel):
     user_id: str | None=Field(None, min_length=1, max_length=100, pattern=r'^[\w.@-]+$',
                               description='Development user identity, same as feedback_api X-User-ID; not authentication')
     role: str='cfo'
-    candidates: int=Field(30,ge=1,le=500)
-    judge: int=Field(5,ge=1,le=100)
-    workers: int=Field(16,ge=1,le=16)
+    candidates: int=Field(15,ge=1,le=500)  # quota per candidate generator, see stage3_news_search/retrieval.py
+    judge: int=Field(15,ge=1,le=100)
+    workers: int=Field(16,ge=1,le=32)  # LLM calls in flight: max_concurrency of the graph; 16 = all 15 judged news at once
     engine: Literal['judge']='judge'
     retrieval: Literal['v2','v3','hybrid','lexical']='v2'
     source: Literal['news','analytics','both']='both'

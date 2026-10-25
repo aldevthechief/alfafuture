@@ -164,13 +164,21 @@ class HybridTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, patch('stage5_insight_detection.news_enrichment.related_news.news_index',
                 return_value=(NEWS, self.index)):
             related = RelatedNews(Path(tmp) / 'events.parquet', ranker=SemanticRanker(model, max_candidates=2),
+                                  candidate_limit=2, fact_store=self.empty_store, rerank=True)
+            default = RelatedNews(Path(tmp) / 'events.parquet', ranker=SemanticRanker(model, max_candidates=2),
                                   candidate_limit=2, fact_store=self.empty_store)
             with patch('common.embed.news_embeddings', return_value=np.array([[.9], [.8], [0.]])), \
                  patch('common.embed.encode', return_value=np.array([[1.]])):
                 result = related.search('ставка', 1)
+                calls = model.predict.call_args.args[0]
+                model.predict.reset_mock()
+                off = default.search('ставка', 1)
         self.assertEqual(result.iloc[0].id, NEWS.iloc[1].id)
-        self.assertEqual(len(model.predict.call_args.args[0]), 2)
+        self.assertEqual(len(calls), 2)
         self.assertEqual(result.attrs['search_diagnostics']['rerank'], 'ok')
+        # off by default (24.10): the cross-encoder is never called, so its model is never loaded
+        model.predict.assert_not_called()
+        self.assertNotIn('rerank', off.attrs['search_diagnostics'])
 
     def test_unavailable_models_fall_back_with_explicit_diagnostics(self):
         ranker = SemanticRanker(Mock(predict=Mock(side_effect=RuntimeError('not installed'))))

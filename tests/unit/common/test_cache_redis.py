@@ -52,6 +52,16 @@ class RedisCacheTests(unittest.TestCase):
         store.update('prompt-3', 'model-a', cut)
         self.assertNotIn(cache_mod.FileLLMCache._key('prompt-3', 'model-a'), self.fake.hashes['alfa:llm'])
 
+    def test_seeded_llm_answers_replay(self):
+        # the JSONL cache value is langchain's dumps string: seeded as is, or (old seed script) JSON-encoded once more
+        from langchain_core.load import dumps
+        raw = dumps([ChatGeneration(message=AIMessage(content='из сида'))])
+        store = cache_mod._redis_llm_cache()
+        self.fake.hset('alfa:llm', cache_mod.FileLLMCache._key('p-raw', 'm'), raw)
+        self.fake.hset('alfa:llm', cache_mod.FileLLMCache._key('p-old', 'm'), json.dumps(raw))
+        self.assertEqual(store.lookup('p-raw', 'm')[0].text, 'из сида')
+        self.assertEqual(store.lookup('p-old', 'm')[0].text, 'из сида')
+
     def test_named_cache_keeps_its_own_hash_and_round_trips_json(self):
         named = cache_mod.JsonlCache('company_brief')
         named.put('U_1', {'industry': 'leasing'})

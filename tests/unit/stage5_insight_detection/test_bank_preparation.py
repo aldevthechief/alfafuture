@@ -9,7 +9,7 @@ import sys
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pymupdf
 from langchain_core.messages import AIMessage
@@ -209,8 +209,9 @@ class FlagTests(unittest.TestCase):
                 bank=Mock()
                 model=ScriptedChatModel(responses=[])
                 models=SimpleNamespace(cheap=lambda **kw:model,agent=lambda **kw:model)
-                scorer=SimpleNamespace(score=lambda *a:SimpleNamespace(score=2,channel='',model_dump=lambda:{'score':2}))
-                judge=Mock(decide=Mock(return_value=SimpleNamespace(is_insight=False,bank_evidence=[],
+                # the news graph awaits stage 4 and the judge (async LLM path)
+                scorer=SimpleNamespace(ascore=AsyncMock(return_value=SimpleNamespace(score=2,channel='',model_dump=lambda:{'score':2})))
+                judge=Mock(adecide=AsyncMock(return_value=SimpleNamespace(is_insight=False,bank_evidence=[],
                     calculation_facts=[],calculation_bank=[],model_dump=lambda:{'is_insight':False})))
                 args=['pipeline.py','synthetic','--engine','judge','--source','news','--retrieval','lexical',*flags]
                 patches=[patch.object(sys,'argv',args), patch('common.data.DATA',Path(tmp)),
@@ -220,7 +221,7 @@ class FlagTests(unittest.TestCase):
                     patch('stage5_insight_detection.bank_analytics.search.BankAnalytics',side_effect=lambda:(order.append('search'),bank)[1]),
                     patch('stage5_insight_detection.news_enrichment.related_news.RelatedNews',Related),
                     patch('stage4_news_relevance.relevance_scoring.relevance.RelevanceScorer',return_value=scorer),
-                    patch('stage4_news_relevance.consequence_extraction.consequences.ConsequenceExtractor',return_value=SimpleNamespace(extract=lambda n:{}))]
+                    patch('stage4_news_relevance.consequence_extraction.consequences.ConsequenceExtractor',return_value=SimpleNamespace(aextract=AsyncMock(return_value={})))]
                 for p in patches: stack.enter_context(p)
                 preparation=stack.enter_context(patch.object(prepare,'prepare_bank',
                     side_effect=lambda *a,**kw:(order.append('prepare'),PreparedBank(lib,report))[1]))
@@ -236,7 +237,7 @@ class FlagTests(unittest.TestCase):
                 if '--chart-mode' in flags: self.assertEqual(options.chart_mode,flags[flags.index('--chart-mode')+1])
                 if '--bank-prepare' in flags: self.assertEqual(options.ocr_budget,0)
                 self.assertIs(judge_factory.call_args.args[2],bank)
-                judge.decide.assert_called_once()
+                judge.adecide.assert_called_once()
                 loop.assert_not_called()
                 saved=json.loads((Path(tmp)/'insights/synthetic_cfo.json').read_text())
                 self.assertEqual(saved[0]['bank_preparation'],report)

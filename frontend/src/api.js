@@ -41,6 +41,7 @@ export const startAnalysis = (company, role, options = {}) => {
 };
 
 export const cabinetAccounts = () => call('/v1/cabinet/accounts');
+export const cabinetFeed = (company, role) => call(`/v1/cabinet/feed?company_id=${encodeURIComponent(company)}&role=${encodeURIComponent(role)}`);
 export const searchCompanies = query => call(`/v1/cabinet/companies?q=${encodeURIComponent(query)}`);
 
 export async function waitJob(id, cancelled, every = 3000) {
@@ -62,9 +63,9 @@ export const jobPreviews = id => call(`/v1/jobs/${id}/insights`);
 const openedInsights = new Map();
 export function loadInsight(card, company) {
   if (!card.preview) return Promise.resolve(card);
-  const key = JSON.stringify([USER_ID, company, card.job_id, card.result_index]);
+  const key = JSON.stringify([USER_ID, company, card.job_id, card.result_index, card.id]);
   if (!openedInsights.has(key)) {
-    const promise = call(`/v1/jobs/${card.job_id}/insights/${card.result_index}`).then(async job => {
+    const promise = call(`/v1/jobs/${card.job_id}/insights/${card.result_index}?insight_id=${encodeURIComponent(card.id)}`).then(async job => {
       const row = job.result.results[0];
       const legacyFacts = !row.evidence && !row.evidence_facts ? await companyFacts(company) : [];
       return { ...toFeed(job, legacyFacts).insights[0], id: card.id, roleLabel: card.roleLabel };

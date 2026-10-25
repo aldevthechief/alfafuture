@@ -22,7 +22,8 @@ class RelatedNews:
     def __init__(self, events_path: Path = DATA / 'news' / 'events.parquet', *, dense: bool | None = None,
                  rerank: bool | None = None, ranker=None, fact_store=None, candidate_limit: int = 40):
         self.dense = os.environ.get('NEWS_SEARCH_DENSE', '1') != '0' if dense is None else dense
-        self.rerank = os.environ.get('NEWS_SEARCH_RERANK', '1') != '0' if rerank is None else rerank
+        # cross-encoder off by default (24.10): -2.3 GB RAM and -70..90 s per judge search; NEWS_SEARCH_RERANK=1 turns it on
+        self.rerank = os.environ.get('NEWS_SEARCH_RERANK', '0') != '0' if rerank is None else rerank
         self.ranker, self.fact_store, self.candidate_limit = ranker, fact_store, candidate_limit
         self.events_path, self.news = events_path, None
         self.refresh()

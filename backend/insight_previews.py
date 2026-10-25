@@ -30,8 +30,12 @@ def preview_feed(job):
                     [dict(component='job', message=job['error'])] if job.get('error') else []))
 
 
-def detail(job, index):
+def detail(job, index, insight_id=None):
     rows = (job.get('result') or {}).get('results', [])
+    if insight_id is not None:
+        # A merged cache may gain rows between preview and open; keep the selected card's identity.
+        index = next((card['result_index'] for card in preview_feed(job)['insights']
+                      if card['id'] == insight_id), -1)
     if index < 0 or index >= len(rows) or rows[index].get('status') != 'ready' or not rows[index].get('insight'):
         raise KeyError(index)
     return dict(metadata(job), result=dict(results=[rows[index]]))

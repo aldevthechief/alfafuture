@@ -133,7 +133,7 @@ function InsightDetails({ insight: i, compact, sources, company, onClose, onHide
 
 const InsightBody = memo(function InsightBody({ insight: i, v, compact, sources }) {
   return <div className="iwin-main">
-            <Section kind="fact" label="Факты · что произошло">
+            {v.facts.length > 0 && <Section kind="fact" label="Факты · что произошло">
               <ul className="facts">{v.facts.map((x, n) => {
                 const ids = refs(x, sources, ['news', 'bank']);
                 const full = compact && i.what_happened.filter(c => x.ids?.includes(c.id)).map(c => c.text).join(' ');
@@ -141,7 +141,7 @@ const InsightBody = memo(function InsightBody({ insight: i, v, compact, sources 
                   {ids.map(id => <NewsRef key={id} id={id} sources={sources} />)}
                   <More full={full} quotes={ids.map(id => sources[id]?.snippet).filter(Boolean)} /></li>;
               })}</ul>
-            </Section>
+            </Section>}
             <Section kind="ai" label="Вывод AI · почему это важно вам"><Labeled items={v.why} /></Section>
             {v.important_if.length > 0 && <Section kind="hyp" label="Особенно важно, если">
               <ul>{v.important_if.map(t => <li key={t}>{t}</li>)}</ul>

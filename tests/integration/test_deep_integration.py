@@ -6,7 +6,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pandas as pd
 import numpy as np
@@ -439,13 +439,13 @@ class OutputBoundaryTests(unittest.TestCase):
         related = SimpleNamespace(event_plausibility=lambda _:1, row_of={41:row}, get=lambda _:row)
         runner = pipeline.InsightPipeline.__new__(pipeline.InsightPipeline)
         runner.related, runner.bank = related, None
-        runner.relevance = Mock(score=Mock(return_value=SimpleNamespace(score=2, model_dump=lambda:{})))
-        runner.consequences = Mock(extract=Mock(return_value={}))
+        runner.relevance = Mock(ascore=AsyncMock(return_value=SimpleNamespace(score=2, model_dump=lambda:{})))
+        runner.consequences = Mock(aextract=AsyncMock(return_value={}))
         from stage5_insight_detection.insight_judge.judge import InsightDecision
-        runner.judge = Mock(decide=Mock(return_value=InsightDecision(is_insight=True, score=2, company_link='Кредит', mechanism='Ставка')))
+        runner.judge = Mock(adecide=AsyncMock(return_value=InsightDecision(is_insight=True, score=2, company_link='Кредит', mechanism='Ставка')))
         ins = insight()
         ins.what_happened = [Claim(text='Ключевая ставка 999%', sources=['news:41'])]
-        runner.writer = Mock(write=Mock(return_value=(ins, Review(ok=True))))
+        runner.writer = Mock(awrite=AsyncMock(return_value=(ins, Review(ok=True))))
         with patch.object(pipeline, 'build', return_value={'synthetic':[]}), patch.object(pipeline, 'candidates', return_value=(NEWS.head(1), [])):
             result = runner.run('synthetic', 'cfo')[0]
         self.assertEqual(result['status'], 'ready')

@@ -2,6 +2,7 @@
 is enough. Every call is traced to Langfuse (if LANGFUSE_* keys are set); one script run = one Langfuse session."""
 import json
 import os
+import time
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.exceptions import OutputParserException
@@ -14,7 +15,7 @@ from pydantic import BaseModel, ValidationError
 
 from common.config import SETTINGS, Settings
 from common.llm.cache import LLM_CACHE
-from common.llm.log import RUN_ID, CallLog
+from common.llm.log import RUN_ID, CallLog, log_tool
 
 
 def langfuse_callbacks() -> list:
@@ -47,6 +48,9 @@ def trace_config(name: str) -> dict:
 # Streamed calls send a chunk every <= 2 s, reasoning included (23.10), so a stream silent for 2 minutes is dead: that is
 # the only client limit. The total duration is bounded by max_tokens and by the proxy, which closes any request at ~15 min.
 TIMEOUT = httpx.Timeout(connect=30.0, read=120.0, write=60.0, pool=60.0)
+import openai  # noqa: E402
+PROXY_DROPS = (openai.APIConnectionError, openai.APITimeoutError, httpx.TransportError)
+PROXY_CUTOFF = 600  # s: a drop this late is the proxy's ~15 min limit, not a network blip
 
 
 class ProxyChatOpenAI(ChatOpenAI):
@@ -54,18 +58,39 @@ class ProxyChatOpenAI(ChatOpenAI):
     puts every call into the run's Langfuse session even from a thread that did not inherit the run's context."""
 
     def generate(self, *args, **kwargs):
-        if not LANGFUSE:
-            return super().generate(*args, **kwargs)
-        from langfuse import propagate_attributes
-        with propagate_attributes(session_id=RUN_ID, tags=[RUN_ID.rsplit('-', 2)[0]]):
-            return super().generate(*args, **kwargs)
+        started = time.monotonic()
+        try:
+            if not LANGFUSE:
+                return super().generate(*args, **kwargs)
+            from langfuse import propagate_attributes
+            with propagate_attributes(session_id=RUN_ID, tags=[RUN_ID.rsplit('-', 2)[0]]):
+                return super().generate(*args, **kwargs)
+        except PROXY_DROPS as error:
+            if fallback := self._fallback(error, started):
+                return fallback.generate(*args, **kwargs)  # the same messages: the dialog goes on as it was
+            raise
 
     async def agenerate(self, *args, **kwargs):
-        if not LANGFUSE:
-            return await super().agenerate(*args, **kwargs)
-        from langfuse import propagate_attributes
-        with propagate_attributes(session_id=RUN_ID, tags=[RUN_ID.rsplit('-', 2)[0]]):
-            return await super().agenerate(*args, **kwargs)
+        started = time.monotonic()
+        try:
+            if not LANGFUSE:
+                return await super().agenerate(*args, **kwargs)
+            from langfuse import propagate_attributes
+            with propagate_attributes(session_id=RUN_ID, tags=[RUN_ID.rsplit('-', 2)[0]]):
+                return await super().agenerate(*args, **kwargs)
+        except PROXY_DROPS as error:
+            if fallback := self._fallback(error, started):
+                return await fallback.agenerate(*args, **kwargs)
+            raise
+
+    def _fallback(self, error: Exception, started: float) -> 'ProxyChatOpenAI | None':
+        """The proxy closes any request at ~15 min (902 s, 24.10: 4 of 6 writers with 50k+ reasoning tokens at ~57 tok/s).
+        A call dropped that late is retried once with reasoning_effort='high' (less reasoning, the same messages)."""
+        if self.reasoning_effort is not None or time.monotonic() - started < PROXY_CUTOFF:
+            return None
+        log_tool('llm_fallback_high', {'model': self.model_name, 'after_s': round(time.monotonic() - started)},
+                 f'{type(error).__name__}: {error}')
+        return self.model_copy(update={'reasoning_effort': 'high'})
 
     def _convert_chunk_to_generation_chunk(self, chunk, default_chunk_class, base_generation_info):
         gen = super()._convert_chunk_to_generation_chunk(chunk, default_chunk_class, base_generation_info)
@@ -119,43 +144,41 @@ def structured(model: BaseChatModel, schema: type[BaseModel], *, attempts: int =
         raise ValueError('Structured output attempts must be positive')
     chain = model.with_structured_output(schema, method='function_calling', include_raw=True)
 
+    def accept(answer):
+        result = answer['parsed'] if answer['parsed'] is not None else from_text(answer['raw'], schema)
+        cut = answer['raw'].response_metadata.get('finish_reason') in ('length', 'max_tokens')
+        return result if isinstance(result, schema) and not cut else None
+
+    def retry_request(value, attempt: int):
+        messages = value.to_messages() if isinstance(value, PromptValue) else convert_to_messages(
+            [HumanMessage(value)] if isinstance(value, str) else value)
+        # A changed request also avoids replaying an invalid, non-empty answer from the LLM cache.
+        return [*messages, HumanMessage(
+            f'Попытка {attempt + 1}: предыдущий ответ не соответствует схеме {schema.__name__}. '
+            'Верни полный ответ через указанный инструмент, соблюдая типы и обязательные поля.')]
+
     def invoke(value, config: RunnableConfig):
         request = value
         for attempt in range(1, attempts + 1):
             try:
-                answer = chain.invoke(request, config=config)
-                result = answer['parsed'] if answer['parsed'] is not None else from_text(answer['raw'], schema)
-                cut = answer['raw'].response_metadata.get('finish_reason') in ('length', 'max_tokens')
-                if isinstance(result, schema) and not cut:
+                if (result := accept(chain.invoke(request, config=config))) is not None:
                     return result
             except (OutputParserException, ValidationError):
                 pass
             if attempt < attempts:
-                messages = value.to_messages() if isinstance(value, PromptValue) else convert_to_messages(
-                    [HumanMessage(value)] if isinstance(value, str) else value)
-                # A changed request also avoids replaying an invalid, non-empty answer from the LLM cache.
-                request = [*messages, HumanMessage(
-                    f'Попытка {attempt + 1}: предыдущий ответ не соответствует схеме {schema.__name__}. '
-                    'Верни полный ответ через указанный инструмент, соблюдая типы и обязательные поля.')]
+                request = retry_request(value, attempt)
         raise StructuredOutputError(schema, attempts)
 
-    async def ainvoke(value, config: RunnableConfig):
+    async def ainvoke(value, config: RunnableConfig):  # the same, awaiting the model (no thread per call)
         request = value
         for attempt in range(1, attempts + 1):
             try:
-                answer = await chain.ainvoke(request, config=config)
-                result = answer['parsed'] if answer['parsed'] is not None else from_text(answer['raw'], schema)
-                cut = answer['raw'].response_metadata.get('finish_reason') in ('length', 'max_tokens')
-                if isinstance(result, schema) and not cut:
+                if (result := accept(await chain.ainvoke(request, config=config))) is not None:
                     return result
             except (OutputParserException, ValidationError):
                 pass
             if attempt < attempts:
-                messages = value.to_messages() if isinstance(value, PromptValue) else convert_to_messages(
-                    [HumanMessage(value)] if isinstance(value, str) else value)
-                request = [*messages, HumanMessage(
-                    f'Попытка {attempt + 1}: предыдущий ответ не соответствует схеме {schema.__name__}. '
-                    'Верни полный ответ через указанный инструмент, соблюдая типы и обязательные поля.')]
+                request = retry_request(value, attempt)
         raise StructuredOutputError(schema, attempts)
 
     return RunnableLambda(invoke, afunc=ainvoke)

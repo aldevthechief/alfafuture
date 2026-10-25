@@ -1,8 +1,9 @@
 """Step 6: turn a positive stage-5 decision into the insight for a given reader role, then self-check it.
 
-write (structured Insight) -> code reminders (one look-again pass) -> check against the evidence (structured Review)
--> up to `revisions` rewrites with the issues. A rejected result keeps the last draft and its issues; every round's
-prompt and answer is in data/logs/calls.jsonl. The shared rule files are injected identically into the writer and the
+write (structured Insight) -> check against the evidence (structured Review) -> if rejected, ONE fix in the same dialog: the
+draft stays as the assistant's turn and the checker's issues (+ code reminders) come as a new user message; the fixed draft
+is final (no second check, 24.10: a writer -> checker -> rewrite x2 chain took up to 40 min). Every call is in
+data/logs/calls.jsonl. The shared rule files are injected identically into the writer and the
 checker, so the checker never demands what the writer was not told; both run at temperature 0 (same draft -> same verdict).
 Two plain LangChain chains: no loop with tools is needed here, the evidence is already collected by stage 5.
 """
@@ -11,11 +12,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from langchain_core.language_models import BaseChatModel
+from langchain_core.messages import AIMessage, HumanMessage
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from common.chunk_search import article_context
 from common.news_evidence import verify_claim_evidence
-from common.llm import ChatModels, PromptLibrary, structured
+from common.llm import ChatModels, PromptLibrary, StructuredOutputError, structured
 from common.llm.log import log_tool
 from common.roles import role_context
 from common.safety import UNTRUSTED_NOTE, render_untrusted
@@ -139,54 +141,64 @@ def reminder_note(found: list[str]) -> str:
 
 
 class InsightWriter:
-    def __init__(self, model: BaseChatModel | None = None, revisions: int = 2):
+    def __init__(self, model: BaseChatModel | None = None):
         model = model or ChatModels().agent()
         if hasattr(model, 'temperature'):  # writer and checker at 0: the same draft gets the same verdict (23.10: 4/6 accepted at 0, 3/5 at 0.2)
             model = model.model_copy(update={'temperature': 0.0})
-        self.writer = PROMPTS.chat('write') | structured(model, Insight)
+        self.prompt = PROMPTS.chat('write')
+        self.writer = structured(model, Insight)
         self.checker = PROMPTS.chat('check') | structured(model, Review)
-        self.revisions = revisions
+        # a checker with no valid verdict (24.10: twice 5-7k reasoning tokens, no tool call, no text) gets one more try
+        # with less reasoning; ChatModels gives no reasoning_effort, a scripted test model has none
+        high = model.model_copy(update={'reasoning_effort': 'high'}) if 'reasoning_effort' in getattr(type(model), 'model_fields', {}) else model
+        self.checker_high = PROMPTS.chat('check') | structured(high, Review)
 
     def write(self, company_id: str, role: str, decision: str, evidence: Evidence) -> tuple[Insight, Review]:
-        """Returns the final insight and the review of the last draft that was checked."""
-        inputs = {'company_id': company_id, 'role': role, **role_context(role), 'decision': decision, 'evidence': evidence.render(),
-                  'rules': RULES}
-        # Identity is supplied by the caller, never by a generated display name (including cached answers).
-        insight = self.writer.invoke(inputs | {'feedback': 'нет'}).model_copy(update={'role': role})
-        if found := self._remind(insight, 0, evidence):  # one look-again pass before the (expensive) checker
-            insight = self.writer.invoke(inputs | {'feedback': reminder_note(found)}).model_copy(update={'role': role})
+        """The final insight and the checker's review; a rejected draft is fixed once in the same dialog and then final."""
+        inputs, dialog = self._dialog(company_id, role, decision, evidence)
+        # identity comes from the caller, never from a generated display name (cached answers included)
+        insight = self.writer.invoke(dialog).model_copy(update={'role': role})
         review = self._check(insight, inputs, evidence)
-        for n in range(1, self.revisions + 1):  # every rewrite gets the checker's issues in full, plus code reminders
-            if review.ok:
-                break
-            found = self._remind(insight, n, evidence)
-            feedback = '\n'.join(f'- {i}' for i in review.issues) + (f'\n\n{reminder_note(found)}' if found else '')
-            insight = self.writer.invoke(inputs | {'feedback': feedback}).model_copy(update={'role': role})
-            review = self._check(insight, inputs, evidence)
-        return insight, review
+        if review.ok:
+            return insight, review
+        return self.writer.invoke(self._fix(dialog, insight, review, evidence)).model_copy(update={'role': role}), self._fixed(review)
 
     async def awrite(self, company_id: str, role: str, decision: str, evidence: Evidence) -> tuple[Insight, Review]:
-        """The same reminders, revisions and checked verdict as write(), awaiting model calls."""
+        """write() with the model calls awaited (no thread waits on the LLM); the local evidence checks stay sync."""
+        inputs, dialog = self._dialog(company_id, role, decision, evidence)
+        insight = (await self.writer.ainvoke(dialog)).model_copy(update={'role': role})
+        verify_claim_evidence(insight, evidence.news, evidence.bank, origin=evidence.origin)
+        try:
+            review = await self.checker.ainvoke(self._check_inputs(insight, inputs))
+        except StructuredOutputError:
+            try:
+                review = await self.checker_high.ainvoke(self._check_inputs(insight, inputs))
+            except StructuredOutputError:
+                review = self._unchecked()
+        if review.ok:
+            return insight, review
+        fixed = await self.writer.ainvoke(self._fix(dialog, insight, review, evidence))
+        return fixed.model_copy(update={'role': role}), self._fixed(review)
+
+    def _dialog(self, company_id, role, decision, evidence) -> tuple[dict, list]:
         inputs = {'company_id': company_id, 'role': role, **role_context(role), 'decision': decision, 'evidence': evidence.render(),
                   'rules': RULES}
-        insight = (await self.writer.ainvoke(inputs | {'feedback': 'нет'})).model_copy(update={'role': role})
-        if found := self._remind(insight, 0, evidence):
-            insight = (await self.writer.ainvoke(inputs | {'feedback': reminder_note(found)})).model_copy(update={'role': role})
-        review = await self._acheck(insight, inputs, evidence)
-        for n in range(1, self.revisions + 1):
-            if review.ok:
-                break
-            found = self._remind(insight, n, evidence)
-            feedback = '\n'.join(f'- {i}' for i in review.issues) + (f'\n\n{reminder_note(found)}' if found else '')
-            insight = (await self.writer.ainvoke(inputs | {'feedback': feedback})).model_copy(update={'role': role})
-            review = await self._acheck(insight, inputs, evidence)
-        return insight, review
+        return inputs, self.prompt.format_messages(**inputs, feedback='нет')
 
-    async def _acheck(self, insight: Insight, inputs: dict, evidence: Evidence) -> Review:
-        verify_claim_evidence(insight, evidence.news, evidence.bank, origin=evidence.origin)
-        return await self.checker.ainvoke({'role': inputs['role'], 'role_title': inputs['role_title'], 'role_focus': inputs['role_focus'],
-                                         'rules': RULES, 'evidence': inputs['evidence'],
-                                         'insight': insight.model_dump_json(indent=1)})
+    def _fix(self, dialog: list, insight: Insight, review: Review, evidence: Evidence) -> list:
+        """The same dialog + the draft as the writer's turn + one user message: what exactly to fix."""
+        found = self._remind(insight, 1, evidence)
+        issues = '\n'.join(f'- {i}' for i in review.issues) or '- (проверка не назвала конкретных мест)'
+        return [*dialog, AIMessage(content=insight.model_dump_json(indent=1)), HumanMessage(content=(
+            'Проверка по материалам отклонила этот инсайт. Исправь ровно эти места и ничего больше:\n' + issues
+            + (f'\n\n{reminder_note(found)}' if found else '')
+            + '\n\nЧто не названо в замечаниях — оставь как есть. Не добавляй новых утверждений без источника. '
+              'Верни полный исправленный инсайт тем же инструментом. Это последняя правка: повторной проверки не будет.'))]
+
+    @staticmethod
+    def _fixed(review: Review) -> Review:
+        log_tool('writer_fixed_once', {}, '\n'.join(review.issues))
+        return Review(ok=True, issues=[f'исправлено по проверке: {i}' for i in review.issues])
 
     @staticmethod
     def _remind(insight: Insight, round_no: int, evidence: Evidence) -> list[str]:
@@ -199,6 +211,21 @@ class InsightWriter:
         # Verbatim quotes get offsets for the card; a missing or paraphrased quote only marks the claim «не подтверждено»
         # (as a blocking issue it rejected 4 of 5 insights on U_68622, 22.10: «(dp, 22.09.2026)» appended, paraphrases).
         verify_claim_evidence(insight, evidence.news, evidence.bank, origin=evidence.origin)
-        return self.checker.invoke({'role': inputs['role'], 'role_title': inputs['role_title'], 'role_focus': inputs['role_focus'],
-                                    'rules': RULES, 'evidence': inputs['evidence'],
-                                    'insight': insight.model_dump_json(indent=1)})
+        try:
+            return self.checker.invoke(self._check_inputs(insight, inputs))
+        except StructuredOutputError:
+            try:
+                return self.checker_high.invoke(self._check_inputs(insight, inputs))
+            except StructuredOutputError:
+                return self._unchecked()
+
+    @staticmethod
+    def _unchecked() -> Review:
+        """No verdict from the checker even with less reasoning: the draft is published, marked as not checked."""
+        log_tool('checker_no_verdict', {}, 'published unchecked')
+        return Review(ok=True, issues=['проверка по материалам не дала вердикта: инсайт не проверен'])
+
+    @staticmethod
+    def _check_inputs(insight: Insight, inputs: dict) -> dict:
+        return {'role': inputs['role'], 'role_title': inputs['role_title'], 'role_focus': inputs['role_focus'],
+                'rules': RULES, 'evidence': inputs['evidence'], 'insight': insight.model_dump_json(indent=1)}

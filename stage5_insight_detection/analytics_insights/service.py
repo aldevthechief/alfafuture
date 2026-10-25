@@ -64,11 +64,11 @@ def analytics_run(company_id: str, role: str, facts: list[dict], *, models=None,
     # shared quota; the run is marked stale_cache. strict=True (pipeline --analytics-strict-cache) reruns a stale cache.
     key = cache_key(company_id, role, facts, pdf_dir)
     if not refresh:
-        run = load_cache(company_id, role, key, cache_dir, strict=strict)
-        if run is not None:
-            return run
-        if run is not None:
-            return run
+        # the API keeps a cache per bank-report snapshot; a new snapshot falls back to the committed cache (same stale-wins rule)
+        for folder in dict.fromkeys((Path(cache_dir), CACHE)):
+            run = load_cache(company_id, role, key, folder, strict=strict)
+            if run is not None:
+                return run
     if cache_only:
         return None
     today = today or date.today().isoformat()

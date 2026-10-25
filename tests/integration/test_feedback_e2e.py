@@ -41,23 +41,28 @@ class FeedbackE2ETests(unittest.TestCase):
 
             def init(pipe, *args, **kwargs):
                 pipe.related = SimpleNamespace(row_of={}, event_plausibility=lambda i:1.0)
-                def score(news, *args):
+                # the news graph awaits stage 4, the judge and the writer (async LLM path)
+                async def score(news, *args):
                     assessed.append(news['id'])
                     return SimpleNamespace(score=2, channel='', model_dump=lambda:{'score':2})
-                pipe.relevance = SimpleNamespace(score=score)
-                pipe.consequences = SimpleNamespace(extract=lambda news:{})
-                pipe.judge = SimpleNamespace(decide=lambda *args:SimpleNamespace(is_insight=True,
-                    bank_evidence=[], calculation_facts=[], calculation_bank=[], related_news_ids=[], mechanism='',
-                    model_dump=lambda:{'is_insight':True}, model_dump_json=lambda:'{}'))
+                async def extract(news):
+                    return {}
+                async def decide(*args):
+                    return SimpleNamespace(is_insight=True, score=2, company_link='', bank_evidence=[], calculation_facts=[],
+                        calculation_bank=[], related_news_ids=[], mechanism='', model_dump=lambda:{'is_insight':True},
+                        model_dump_json=lambda:'{}')
+                pipe.relevance = SimpleNamespace(ascore=score)
+                pipe.consequences = SimpleNamespace(aextract=extract)
+                pipe.judge = SimpleNamespace(adecide=decide)
                 pipe.bank = None
-                def write(company, role, decision, evidence):
+                async def write(company, role, decision, evidence):
                     news = evidence.news[0]
                     return Insight(title=news['title'], role=role,
                         what_happened=[dict(text=news['text'], sources=[f'news:{news["id"]}'])],
                         why_it_matters=[dict(text='У компании есть кредитные продукты', sources=['fact:1'])],
                         actions=['Проверить план расходов'], ai_conclusion='Проверить влияние на компанию',
                         confidence='low'), Review(ok=True)
-                pipe.writer = SimpleNamespace(write=write)
+                pipe.writer = SimpleNamespace(awrite=write)
 
             service = Service(root/'api', models_factory=Mock())
             store = Store(root/'feedback'/'feedback.sqlite3')

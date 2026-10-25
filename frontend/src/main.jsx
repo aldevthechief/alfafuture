@@ -1,12 +1,12 @@
 // Our widgets inside the cabinet shell (index.html), client's point of view: one-line home block, «Инсайты» page
 // (compact feed, company profile with HITL questions) and the large insight window.
-// The entry chooses company/role and pins an analysis. The shell exposes window.demoContext;
+// The entry chooses company/role; the feed merges saved and newly completed analyses for that reader.
 // API feed previews and individual detail requests keep unopened cards out of the initial render.
 import React, { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { createPortal } from 'react-dom';
 import { Button } from '@alfalab/core-components/button';
-import { API_ENABLED, jobPreviews, latestJobs, startAnalysis, waitJob } from './api';
+import { API_ENABLED, cabinetFeed, startAnalysis } from './api';
 import './insights.css';
 import AccountChooser from './accountChooser.jsx';
 import { SESSION_KEY, validSession } from './cabinetMode.js';
@@ -47,30 +47,26 @@ function useLive(ctx) {
   useEffect(() => {
     if (!API_ENABLED) return;
     let stop = false;
-    const cancelled = () => stop;
-    const show = async job => {
-      if (stop) return;
-      const feed = await jobPreviews(job.id);
-      if (!stop) setLive(l => ({ ...l, state: 'ready', feed, job: job.id, error: null }));
-    };
-    const follow = async job => {
-      setLive(l => ({ ...l, state: 'running', error: null }));
-      const done = await waitJob(job.id, cancelled);
-      if (stop) return;
-      if (['succeeded', 'partial'].includes(done.status)) await show(done);
-      else setLive(l => ({ ...l, state: l.feed ? 'ready' : 'error', error: done.error || `Анализ: ${done.status}` }));
-    };
+    let timer;
     setLive({ state: 'loading' });
-    (async () => {
-      if (ctx.kind === 'cached' && !activeJob) { await show({ id:ctx.job_id }); return; }
-      if (activeJob || ctx.job_id) { await follow({ id:activeJob || ctx.job_id }); return; }
-      const { done, running } = await latestJobs(ctx.company, ctx.role);
-      if (done) await show(done);
-      else if (!stop) setLive({ state: 'none' });
-      if (running && !stop) await follow(running);
-    })().catch(e => !stop && setLive(l => ({ ...l, state: 'error', error: e.message })));
-    // Follow the job created by the entry form or the explicit refresh action.
-    return () => { stop = true; };
+    const refresh = async () => {
+      try {
+        const feed = await cabinetFeed(ctx.company, ctx.role);
+        if (stop) return;
+        const latest = feed.latest_job;
+        const requested = activeJob || (ctx.kind === 'live' ? ctx.job_id : null);
+        const failed = latest?.id === requested && ['failed', 'interrupted'].includes(latest.status);
+        setLive({ state:feed.running_job ? 'running' : feed.insights.length ? 'ready' : failed ? 'error' : 'none',
+          feed, error:failed ? latest.error || `Анализ: ${latest.status}` : null });
+      } catch (error) {
+        if (!stop) setLive(l => ({ ...l, state:l.feed?.insights.length ? 'ready' : 'error', error:error.message }));
+      } finally {
+        if (!stop) timer = setTimeout(refresh, 5000);
+      }
+    };
+    refresh();
+    // Refresh only small previews; full evidence is still fetched only when a card opens.
+    return () => { stop = true; clearTimeout(timer); };
   }, [ctx.company, ctx.role, ctx.job_id, ctx.kind, activeJob]);
   const run = useCallback(() => startAnalysis(ctx.company, ctx.role).then(job => setActiveJob(job.id))
     .catch(e => setLive(l => ({ ...l, state: 'error', error: e.message }))), [ctx.company, ctx.role]);

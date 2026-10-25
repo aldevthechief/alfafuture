@@ -73,10 +73,11 @@ class ConsequenceExtractor:
     async def aextract(self, news: dict) -> dict:
         """extract() with the model calls awaited; the cache is checked first, a computed value is stored the same way."""
         key = self._key(news)
-        async def compute():
-            return self._merge(news, [(start, text, (await self.chain.ainvoke({'title': news['title'], 'text': text})).model_dump())
-                                      for start, end, text in self._chunks(news)])
-        value = await self.cache.aget_or_compute(key, compute)
+        value = self.cache.get(key)
+        if value is None:
+            value = self._merge(news, [(start, text, (await self.chain.ainvoke({'title': news['title'], 'text': text})).model_dump())
+                                       for start, end, text in self._chunks(news)])
+            self.cache.put(key, value)
         return self._bind(value, news)
 
     @staticmethod

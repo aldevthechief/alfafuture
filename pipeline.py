@@ -2,7 +2,7 @@
 
 2 company profile (stage2_company_facts/profile: data/companies/profiles.jsonl or built on the fly) -> 3 news search -> 4 relevance + consequences + plausibility -> 5 insight judge (related news, bank view)
 -> 6 insight for the role, self-checked.
-python -X utf8 pipeline.py U_68622 --role cfo [--candidates 30 --judge 5] [--ocr]   (needs LLM_API_KEY)
+python -X utf8 pipeline.py U_68622 --role cfo [--candidates 15 --judge 15] [--ocr]   (needs LLM_API_KEY)
 --ocr: before the run, OCR the bank analytics PDFs (vision model, cached per page) and rebuild the bank library.
 -> data/insights/<company>_<role>.json
 
@@ -20,7 +20,7 @@ lexical = the facet search. --candidates limits distinct events in v2 / hybrid m
 CLI/API only run the judge engine. The legacy run_loop() and its modules remain for direct development use;
 shared computations and audit are still used by judge. PDF preparation runs before the judge graph.
 """
-import argparse, asyncio, contextvars, hashlib, inspect, json, math, operator, sys
+import argparse, asyncio, contextvars, hashlib, json, math, operator, sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Annotated, TYPE_CHECKING, TypedDict
@@ -32,7 +32,6 @@ from stage2_company_facts.profile.context import CONTEXT_CATEGORY
 
 from langchain_core.callbacks import UsageMetadataCallbackHandler
 from langchain_core.language_models import BaseChatModel
-from langchain_core.runnables import RunnableLambda
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
 
@@ -50,6 +49,7 @@ from stage3_news_search.retrieval import candidates
 from stage4_news_relevance.consequence_extraction.consequences import ConsequenceExtractor
 from stage4_news_relevance.relevance_scoring.relevance import RelevanceScorer
 from stage5_insight_detection.bank_analytics.search import BankAnalytics
+from stage5_insight_detection.insight_dedup.dedup import DedupGate
 from stage5_insight_detection.insight_judge.judge import InsightJudge
 from stage5_insight_detection.news_enrichment.related_news import RelatedNews
 from stage6_insight_generation.insight_writer.insight_v2 import migrate_result
@@ -66,6 +66,8 @@ class _NewsState(TypedDict, total=False):
     rows: list[dict]
     assessed: Annotated[list[tuple], operator.add]   # (idx, priority, news, stage4 | error)
     top: list[tuple]                                  # (pos, priority, news, stage4), ranked
+    decided: Annotated[list[tuple], operator.add]     # (pos, news, result, decision | None) after the judge
+    to_write: list[tuple]                             # the positive decisions left by the duplicate gate
     judge_rows: Annotated[list[tuple], operator.add]  # (pos, result row)
     news_results: Annotated[list[dict], operator.add]
 
@@ -85,25 +87,6 @@ def personalization_context(value: Personalization | None) -> str:
                             value.render(), body_limit=16000)
 
 
-async def _await_component(component, method, *args, **kwargs):
-    """Use native async components; retain compatibility with existing sync-only injected components."""
-    asynchronous = getattr(component, 'a' + method, None)
-    if inspect.iscoroutinefunction(asynchronous):
-        return await asynchronous(*args, **kwargs)
-    return await asyncio.to_thread(getattr(component, method), *args, **kwargs)
-
-
-def _run_async(factory):
-    """Run one async graph while preserving the existing synchronous entry points and context."""
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.run(factory())
-    context = contextvars.copy_context()
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        return executor.submit(context.run, lambda: asyncio.run(factory())).result()
-
-
 class InsightPipeline:
     def __init__(self, cheap: BaseChatModel, agent: BaseChatModel, consequences: ConsequenceExtractor | None = None,
                  bank: BankAnalytics | None = None, related: RelatedNews | None = None):
@@ -113,6 +96,9 @@ class InsightPipeline:
         self.bank = bank
         self.judge = InsightJudge(agent, self.related, bank)
         self.writer = InsightWriter(agent)
+        # one call per run that merges duplicate positive decisions before the writer (experiments/insight_dedup)
+        low = ({'reasoning_effort': 'low'} if 'reasoning_effort' in getattr(type(agent), 'model_fields', {}) else {})
+        self.dedup = DedupGate(agent.model_copy(update=low) if low else agent)
         self._graph = None
         self._params: dict = {}
 
@@ -126,23 +112,28 @@ class InsightPipeline:
         self._params = {'company_id': company_id, 'role': role, 'n_judge': n_judge,
                         'personalization': pers, 'user_context': personalization_context(pers)}
         rows = self._prepare(company_id, role, n_candidates, retrieval)
-        graph, config = self.news_graph(), {'max_concurrency': max(1, workers)}
-        state = _run_async(lambda: graph.ainvoke({'rows': rows}, config=config))
+        # one event loop per run: the LLM calls of all news are coroutines in flight together, no thread waits on a model
+        state = asyncio.run(self.news_graph().ainvoke({'rows': rows}, config={'max_concurrency': max(1, workers)}))
         return state['news_results']
 
     def news_graph(self):
         """Stages 2-6 as a compiled LangGraph graph (see langgraph-e2e-design.md): prepare is done by run(),
-        assess fans out per news, rank joins, judge+write fans out per top news, collect joins."""
+        assess fans out per news, rank joins, the judges fan out per top news, the duplicate gate joins them,
+        the writers fan out per remaining positive decision, collect joins."""
         if getattr(self, '_graph', None) is None:
             g = StateGraph(_NewsState)
-            g.add_node('assess_one', RunnableLambda(self._assess_node, afunc=self._aassess_node))
+            g.add_node('assess_one', self._assess_node)
             g.add_node('rank', self._rank_node)
-            g.add_node('judge_one', RunnableLambda(self._judge_node, afunc=self._ajudge_node))
+            g.add_node('judge_one', self._judge_node)
+            g.add_node('gate', self._gate_node)
+            g.add_node('write_one', self._write_node)
             g.add_node('collect', self._collect_node)
             g.add_conditional_edges(START, self._fan_assess, ['assess_one', 'rank'])
             g.add_edge('assess_one', 'rank')
-            g.add_conditional_edges('rank', self._fan_judge, ['judge_one', 'collect'])
-            g.add_edge('judge_one', 'collect')
+            g.add_conditional_edges('rank', self._fan_judge, ['judge_one', 'gate'])
+            g.add_edge('judge_one', 'gate')
+            g.add_conditional_edges('gate', self._fan_write, ['write_one', 'collect'])
+            g.add_edge('write_one', 'collect')
             g.add_edge('collect', END)
             self._graph = g.compile()
         return self._graph
@@ -157,7 +148,12 @@ class InsightPipeline:
     @staticmethod
     def _fan_judge(state: _NewsState) -> list:
         return [Send('judge_one', {'pos': p, 'priority': pr, 'news': n, 'stage4': s, 'ctx': contextvars.copy_context()})
-                for p, (pr, n, s) in enumerate(state['top'])] or ['collect']
+                for p, (pr, n, s) in enumerate(state['top'])] or ['gate']
+
+    @staticmethod
+    def _fan_write(state: _NewsState) -> list:
+        return [Send('write_one', {'pos': p, 'news': n, 'result': r, 'decision': d, 'ctx': contextvars.copy_context()})
+                for p, n, r, d in state.get('to_write') or []] or ['collect']
 
     def _prepare(self, company_id: str, role: str, n_candidates: int, retrieval: str) -> list[dict]:
         if isinstance(self.related, RelatedNews):
@@ -192,13 +188,7 @@ class InsightPipeline:
     def _model_error(error: StructuredOutputError, stage: str) -> dict:
         return {'stage': stage, 'schema': error.schema, 'attempts': error.attempts, 'message': str(error)}
 
-    def _assess_node(self, item: dict) -> dict:
-        return item['ctx'].run(lambda: _run_async(lambda: self._assess_body(item)))
-
-    async def _aassess_node(self, item: dict) -> dict:
-        return await asyncio.get_running_loop().create_task(self._assess_body(item), context=item['ctx'])
-
-    async def _assess_body(self, item: dict) -> dict:
+    async def _assess_node(self, item: dict) -> dict:
         """Stage 4 for one news: (idx, priority, news, stage4) — priority None marks a model error."""
         idx, news = item['idx'], item['news']
         p = self._params
@@ -207,10 +197,10 @@ class InsightPipeline:
             plausibility = self.related.event_plausibility(news['id'])
             stage = 'relevance'
             try:
-                relevance = await _await_component(self.relevance, 'score', news, '\n'.join(p['key_facts']), p['role'])
+                relevance = await self.relevance.ascore(news, '\n'.join(p['key_facts']), p['role'])
                 stage = 'consequences'
                 stage4 = {'matched_fragments': news.get('matched_fragments', []), 'relevance': relevance.model_dump(),
-                          'consequences': await _await_component(self.consequences, 'extract', news), 'plausibility': plausibility}
+                          'consequences': await self.consequences.aextract(news), 'plausibility': plausibility}
                 priority = relevance.score * (0.5 if plausibility is None else plausibility)
                 if p['personalization'] is not None:
                     stage4['personalization_factor'] = p['personalization'].factor(news, relevance.channel)
@@ -222,7 +212,8 @@ class InsightPipeline:
                                     else {'stage': stage, 'type': type(error).__name__, 'message': str(error)[:500]})
             return priority, news, stage4
 
-        priority, news, out = await body()
+        # the task's own copy of the run context (Langfuse session, news snapshot), as the thread version had
+        priority, news, out = await asyncio.get_running_loop().create_task(body(), context=item['ctx'])
         return {'assessed': [(idx, priority, news, out)]}
 
     def _rank_node(self, state: _NewsState) -> dict:
@@ -237,76 +228,116 @@ class InsightPipeline:
         top = [t for t in sorted(scored, key=lambda t: (-t[1], t[0]))[:self._params['n_judge']] if t[1] > 0]
         return {'news_results': error_rows, 'top': [(priority, news, stage4) for _, priority, news, stage4 in top]}
 
-    def _judge_node(self, item: dict) -> dict:
-        """Stages 5-6 for one top news: judge -> writer -> checker -> audit, as one result row."""
-        result, news = item['ctx'].run(self._judge_body, item)
+    async def _judge_node(self, item: dict) -> dict:
+        """Stage 5 for one top news: the judge's decision; the writer waits for the duplicate gate."""
+        result, news, decision = await asyncio.get_running_loop().create_task(self._decide(item), context=item['ctx'])
+        return {'decided': [(item['pos'], news, result, decision)]}
+
+    async def _decide(self, item: dict) -> tuple[dict, dict, object]:
+        """(result, news, decision if it is an insight else None); a model error is the result row's status."""
+        p = self._params
+        news, result = item['news'], {'stage4': item['stage4']}
+        try:
+            decision = await self.judge.adecide(news['id'], p['company_id'], p['facts'], p['role'], item['stage4'])
+        except Exception as error:  # a dropped connection or a timeout loses this news, not the whole batch
+            result.update(status='model_error', error=self._model_error(error, 'judge') if isinstance(error, StructuredOutputError)
+                          else {'stage': 'judge', 'type': type(error).__name__, 'message': str(error)[:500]})
+            return result, news, None
+        result['decision'] = decision.model_dump()
+        if decision.bank_evidence:
+            result['judge_bank'] = decision.bank_evidence
+        if decision.calculation_facts:
+            result['calculations'] = decision.calculation_facts
+            result['calculation_bank'] = decision.calculation_bank
+        return result, news, decision if decision.is_insight else None
+
+    async def _gate_node(self, state: _NewsState) -> dict:
+        """Join of the judges: duplicate positive decisions (same event or bank forecast and the same consequence) are
+        merged before any writer runs — the best-scored one stays and gets the others' news; the rest become
+        `duplicate` rows. Rows without a positive decision are final here."""
+        decided = sorted(state.get('decided') or [], key=lambda t: t[0])
+        rows = [(pos, self._record(news, **result)) for pos, news, result, decision in decided if decision is None]
+        positive = [t for t in decided if t[3] is not None]
+        by_pos = {str(t[0]): t for t in positive}
+        try:  # fewer than two positive decisions: nothing to merge, no call
+            groups = await self.dedup.agroups([self._gate_item(*t) for t in positive], self._params['role']) \
+                if len(positive) > 1 else []
+        except Exception as error:  # no gate verdict: every positive decision is written, as before the gate
+            from common.llm.log import log_tool
+            log_tool('dedup_gate_error', {}, f'{type(error).__name__}: {error}')
+            groups = []
+        dropped = set()
+        for group in groups:
+            members = [by_pos[i] for i in group]
+            pos, news, result, decision = min(members, key=lambda t: (-t[3].score, t[0]))
+            losers = [t for t in members if t[0] != pos]
+            merged = [n['id'] for _, n, _, _ in losers] + decision.related_news_ids + \
+                     [i for _, _, _, d in losers for i in d.related_news_ids]
+            decision.related_news_ids = [i for i in dict.fromkeys(merged) if i != news['id']]
+            result.update(decision=decision.model_dump(), merged_duplicates=[n['id'] for _, n, _, _ in losers])
+            for lpos, lnews, lresult, _ in losers:
+                rows.append((lpos, self._record(lnews, **lresult, status='duplicate', duplicate_of=news['id'])))
+                dropped.add(lpos)
+        return {'judge_rows': rows, 'to_write': [t for t in positive if t[0] not in dropped]}
+
+    def _gate_item(self, pos: int, news: dict, result: dict, decision) -> dict:
+        related = [self.related.get(i)['title'] for i in decision.related_news_ids[:3] if i in self.related.row_of]
+        return {'id': str(pos), 'kind': 'news', 'news_titles': [news['title'], *related],
+                'company_link': decision.company_link, 'mechanism': decision.mechanism}
+
+    async def _write_node(self, item: dict) -> dict:
+        """Stage 6 for one positive decision: writer -> checker -> (one fix) -> audit, as one result row."""
+        result, news = await asyncio.get_running_loop().create_task(self._write(item), context=item['ctx'])
         return {'judge_rows': [(item['pos'], self._record(news, **result))]}
 
-    async def _ajudge_node(self, item: dict) -> dict:
-        result, news = await asyncio.get_running_loop().create_task(self._ajudge_body(item), context=item['ctx'])
-        return {'judge_rows': [(item['pos'], self._record(news, **result))]}
-
-    def _judge_body(self, item: dict) -> tuple[dict, dict]:
-        return _run_async(lambda: self._ajudge_body(item))
-
-    async def _ajudge_body(self, item: dict) -> tuple[dict, dict]:
+    async def _write(self, item: dict) -> tuple[dict, dict]:
         p = self._params
         company_id, role, facts, all_facts = p['company_id'], p['role'], p['facts'], p['all_facts']
-        news, stage4 = item['news'], item['stage4']
-        result, stage = {'stage4': stage4}, 'judge'
+        news, result, decision = item['news'], dict(item['result']), item['decision']
+        calculations, stage = decision.calculation_facts, 'writer'
         try:
-            decision = await _await_component(self.judge, 'decide', news['id'], company_id, facts, role, stage4)  # stage 5
-            result['decision'] = decision.model_dump()
-            if decision.bank_evidence:
-                result['judge_bank'] = decision.bank_evidence
-            calculations = decision.calculation_facts
-            if calculations:
-                result['calculations'] = calculations
-                result['calculation_bank'] = decision.calculation_bank
-            if decision.is_insight:                                                   # stage 6
-                # Preserve the original numbering for discussion even if company tables later change.
-                result['evidence_facts'] = list(all_facts)
-                related = [self.related.get(i) for i in decision.related_news_ids[:3] if i in self.related.row_of]
-                # Reuse the exact sources read by the judge (hits, neighbours, compared tables).
-                # A fresh mechanism query is only a fallback when the judge read no bank material.
-                bank = decision.bank_evidence or ((await asyncio.to_thread(self.bank.search, decision.mechanism)) if self.bank else [])
-                bank = list({b.get('id') or f'bank:{b["report"]}:{b["page"]}': b
-                             for b in [*bank, *decision.calculation_bank]}.values())
-                stage = 'writer'
-                insight, review = await _await_component(self.writer, 'write', company_id, role, decision.model_dump_json(),
-                                                    Evidence(news=[news, *related], facts=all_facts, bank=bank,
-                                                             calculations=calculations,
-                                                             full_bank_ids={b['id'] for b in [*decision.bank_evidence,
-                                                                                            *decision.calculation_bank]}))
-                result |= {'insight' if review.ok else 'draft': insight.model_dump(),
-                           'review': review.model_dump(), 'status': 'ready' if review.ok else 'review_rejected'}
-                from common.evidence import EvidenceSnapshot
-                # Capture the actual run's sources now; importing the card must not reread changed company/news data.
-                writer_news = {int(n['id']): n for n in [news, *related]}
-                result['evidence'] = EvidenceSnapshot.from_result(
-                    dict(result, news_id=news['id'], bank=bank), company_id, role,
-                    news_lookup=writer_news.get,
-                    facts=facts).model_dump(mode='json')
-                if review.ok:
-                    from stage5_insight_detection.analyst_loop.audit import audit
-                    from stage5_insight_detection.analyst_loop.verdict import InsightBrief
-                    evidence_facts = [dict(id=f'fact:{i}', value='', unit='', formula='', label=f)
-                                      for i, f in enumerate(all_facts, 1) if facts[i - 1]['cat'] != CONTEXT_CATEGORY]
-                    evidence_facts += [f for f in calculations if f['kind'] == 'fact']
-                    hypotheses = [f for f in calculations if f['kind'] == 'hypothesis']
-                    banks = [dict(b, id=b.get('id') or f'bank:{b["report"]}:{b["page"]}',
-                                  freshness=b.get('freshness', 'stale' if b['stale'] else 'fresh')) for b in bank]
-                    sources = {f'news:{n["id"]}': f'{n["title"]}. {n.get("text", "")}' for n in [news, *related]}
-                    sources |= {b['id']: b['text'] for b in banks}
-                    brief = InsightBrief(refs=[*sources, *[f['id'] for f in evidence_facts + hypotheses]], facts=evidence_facts,
-                        consequences=[], risks=[], bank=banks, hypotheses=hypotheses,
-                        impact=insight.impact.model_dump() if insight.impact else
-                            {'level': 'low', 'criteria': 'В режиме judge количественное влияние кодом не рассчитано'},
-                        not_bank_position=not any(b.get('own_view') and b['freshness'] in ('fresh', 'aging') for b in banks), warnings=[])
-                    insight, warnings = audit(insight, brief, sources)
-                    result.update(insight=insight.model_dump(), audit=warnings)
-                    if any(w['code'] in {'unknown_ref', 'no_source'} for w in warnings):
-                        result.update(draft=result.pop('insight'), status='audit_rejected')
+            # Preserve the original numbering for discussion even if company tables later change.
+            result['evidence_facts'] = list(all_facts)
+            related = [self.related.get(i) for i in decision.related_news_ids[:3] if i in self.related.row_of]
+            # Reuse the exact sources read by the judge (hits, neighbours, compared tables).
+            # A fresh mechanism query is only a fallback when the judge read no bank material.
+            bank = decision.bank_evidence or ((await asyncio.to_thread(self.bank.search, decision.mechanism)) if self.bank else [])
+            bank = list({b.get('id') or f'bank:{b["report"]}:{b["page"]}': b
+                         for b in [*bank, *decision.calculation_bank]}.values())
+            insight, review = await self.writer.awrite(company_id, role, decision.model_dump_json(),
+                                                       Evidence(news=[news, *related], facts=all_facts, bank=bank,
+                                                                calculations=calculations,
+                                                                full_bank_ids={b['id'] for b in [*decision.bank_evidence,
+                                                                                               *decision.calculation_bank]}))
+            result |= {'insight' if review.ok else 'draft': insight.model_dump(),
+                       'review': review.model_dump(), 'status': 'ready' if review.ok else 'review_rejected'}
+            from common.evidence import EvidenceSnapshot
+            # Capture the actual run's sources now; importing the card must not reread changed company/news data.
+            writer_news = {int(n['id']): n for n in [news, *related]}
+            result['evidence'] = EvidenceSnapshot.from_result(
+                dict(result, news_id=news['id'], bank=bank), company_id, role,
+                news_lookup=writer_news.get,
+                facts=facts).model_dump(mode='json')
+            if review.ok:
+                from stage5_insight_detection.analyst_loop.audit import audit
+                from stage5_insight_detection.analyst_loop.verdict import InsightBrief
+                evidence_facts = [dict(id=f'fact:{i}', value='', unit='', formula='', label=f)
+                                  for i, f in enumerate(all_facts, 1) if facts[i - 1]['cat'] != CONTEXT_CATEGORY]
+                evidence_facts += [f for f in calculations if f['kind'] == 'fact']
+                hypotheses = [f for f in calculations if f['kind'] == 'hypothesis']
+                banks = [dict(b, id=b.get('id') or f'bank:{b["report"]}:{b["page"]}',
+                              freshness=b.get('freshness', 'stale' if b['stale'] else 'fresh')) for b in bank]
+                sources = {f'news:{n["id"]}': f'{n["title"]}. {n.get("text", "")}' for n in [news, *related]}
+                sources |= {b['id']: b['text'] for b in banks}
+                brief = InsightBrief(refs=[*sources, *[f['id'] for f in evidence_facts + hypotheses]], facts=evidence_facts,
+                    consequences=[], risks=[], bank=banks, hypotheses=hypotheses,
+                    impact=insight.impact.model_dump() if insight.impact else
+                        {'level': 'low', 'criteria': 'В режиме judge количественное влияние кодом не рассчитано'},
+                    not_bank_position=not any(b.get('own_view') and b['freshness'] in ('fresh', 'aging') for b in banks), warnings=[])
+                insight, warnings = audit(insight, brief, sources)
+                result.update(insight=insight.model_dump(), audit=warnings)
+                if any(w['code'] in {'unknown_ref', 'no_source'} for w in warnings):
+                    result.update(draft=result.pop('insight'), status='audit_rejected')
         except Exception as error:  # a dropped connection or a timeout loses this news, not the whole batch
             result.update(status='model_error', error=self._model_error(error, stage) if isinstance(error, StructuredOutputError)
                           else {'stage': stage, 'type': type(error).__name__, 'message': str(error)[:500]})
@@ -431,15 +462,42 @@ def run_analytics(company_id: str, role: str, models: ChatModels, *, cache_only:
         return None, f'{type(e).__name__}: {e}'
 
 
-def analytics_rows(run, error: str, news_results: list[dict], share: float, cache_only: bool) -> list[dict]:
+def analytics_rows(run, error: str, news_results: list[dict], share: float, cache_only: bool,
+                   gate: DedupGate | None = None, role: str = '') -> list[dict]:
     """The rows of the analytics part of the result list: the insights within the quota next to the ready news insights + the run row.
-    No run (error, or cache only without a cached run): no rows, the reason is printed; the news results stay as they are."""
+    With a duplicate gate, analytics insights that repeat a news insight or each other are dropped first (the news one
+    and the best-ranked analytics one stay). No run (error, or cache only without a cached run): no rows, the reason is
+    printed; the news results stay as they are."""
     from stage5_insight_detection.analytics_insights.service import result_rows, select
     if run is None:
         print('analytics: ' + (error or ('cache only: no cached run for this company and role' if cache_only else 'no run')))
         return []
-    ready = sum(1 for r in news_results if r.get('status') == 'ready' and r.get('insight'))
-    return result_rows(run, select(run.insights, ready, share))
+    ready = [r for r in news_results if r.get('status') == 'ready' and r.get('insight')]
+    insights = analytics_dedup(run.insights, ready, gate, role) if gate else run.insights
+    return result_rows(run, select(insights, len(ready), share))
+
+
+def analytics_dedup(insights: list, news_rows: list[dict], gate: DedupGate, role: str) -> list:
+    """Analytics insights without the duplicates of news insights and of each other (one gate call); no verdict: all."""
+    from stage5_insight_detection.analytics_insights.service import select
+    items = [{'id': f'n{k}', 'kind': 'news', 'company_link': (r.get('decision') or {}).get('company_link', ''),
+              'mechanism': (r.get('decision') or {}).get('mechanism', ''),
+              'news_titles': [n.get('title', '') for n in (r.get('news_references') or {}).values()] or [r.get('title', '')]}
+             for k, r in enumerate(news_rows)]
+    items += [{'id': f'a{k}', 'kind': 'analytics', 'title': i.title,
+               'thesis': i.why_it_matters[-1].text if i.why_it_matters else ''} for k, i in enumerate(insights)]
+    try:
+        groups = gate.groups(items, role)  # sync: the merge node runs outside the news graph's event loop
+    except Exception as error:
+        from common.llm.log import log_tool
+        log_tool('dedup_gate_error', {'stage': 'analytics'}, f'{type(error).__name__}: {error}')
+        return insights
+    drop = set()
+    for group in groups:
+        mine = [insights[int(i[1:])] for i in group if i.startswith('a')]
+        keep = [] if len(mine) < len(group) else select(mine, 0)[:1]  # a news insight in the group wins
+        drop |= {id(i) for i in mine if all(i is not k for k in keep)}
+    return [i for i in insights if id(i) not in drop]
 
 
 def budget_arg(value: str) -> float:
@@ -520,9 +578,10 @@ if __name__ == '__main__':
     ap.add_argument('company_id')
     ap.add_argument('--role', default='cfo', choices=list(roles()))
     ap.add_argument('--user-id', default=None, help='apply this user\'s feedback for this company and role')
-    ap.add_argument('--candidates', type=int, default=30)
-    ap.add_argument('--judge', type=int, default=5)
-    ap.add_argument('--workers', type=int, default=16, help='judge engine: news processed in parallel (LLM calls in flight)')
+    # 15 events with a quota per candidate generator (stage3_news_search/retrieval.py), all of them go to the judge
+    ap.add_argument('--candidates', type=int, default=15)
+    ap.add_argument('--judge', type=int, default=15)
+    ap.add_argument('--workers', type=int, default=16, help='judge engine: news processed in parallel (LLM calls in flight); 16 = all 15 judged news at once')
     ap.add_argument('--engine', choices=['judge'], default='judge', help='judge is the only public engine')
     ap.add_argument('--retrieval', choices=['v2', 'v3', 'hybrid', 'lexical'], default='v2',
                     help='v2 = standard generators + generator factory (e5 + qwen + BM25); v3 = v2 + news-first channel generators; '
@@ -595,12 +654,13 @@ if __name__ == '__main__':
                     a.company_id, a.role, models, cache_only=a.analytics_cache_only, refresh=a.analytics_refresh,
                     strict=a.analytics_strict_cache, bank=bank))
 
+            pipe = InsightPipeline(models.cheap(), models.agent(), bank=bank)
             graph = build_e2e_graph(
-                InsightPipeline(models.cheap(), models.agent(), bank=bank),
+                pipe,
                 with_analytics=a.source == 'both',
                 run_analytics_fn=_run_analytics,
                 analytics_rows_fn=lambda run, error, rows: analytics_rows(run, error, rows, a.analytics_share,
-                                                                         a.analytics_cache_only),
+                                                                         a.analytics_cache_only, pipe.dedup, a.role),
                 migrate_fn=lambda r: migrate_result(r, a.company_id),
                 save_fn=save_run)
             state = graph.invoke({'company_id': a.company_id, 'role': a.role, 'n_candidates': a.candidates,

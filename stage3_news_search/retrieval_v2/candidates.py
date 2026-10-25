@@ -19,7 +19,7 @@ from stage3_news_search.retrieval_v2 import factory
 from stage3_news_search.retrieval_v2.hybrid import HybridSearch, doc_texts
 
 STANDARD_BUDGET = 200
-FACTORY_SHARE = 0.7  # of the ordering weight; tuned on the labels of 4 companies (README)
+FACTORY_SHARE = 0.5  # of the ordering weight and of the judge seats (quota_pick); was 0.7 tuned on 4 companies, 0.5 since 24.10
 REASON_INSTRUCTIONS = {  # as experiments/retrieval/push.py, where they won over generic instructions
     'own_industry': 'Найди новости о регулировании, ценах, спросе и конкуренции в этой отрасли',
     'supplier_industry': 'Найди новости о событиях, сильно влияющих на эту отрасль поставщиков компании: цены, дефицит, регулирование, сбои',
@@ -92,14 +92,43 @@ def candidates(company_id: str, facts: list[dict], role: str | None = None, *, n
 SHARES = {'factory': FACTORY_SHARE, 'standard': 1 - FACTORY_SHARE}
 
 
-def order(events: pd.DataFrame, picked: dict[int, list[dict]], gens: list[dict], shares: dict[str, float]) -> pd.DataFrame:
-    """Pool rows sorted by priority = Σ over the generators that found the event of weight / (1 + rank). A source's share
-    is split among its generators by `weight` (equal when absent, as the factory's); the shares of the sources present
-    are renormalised, so without factory generators the standard ones take it all."""
+def generator_weights(gens: list[dict], shares: dict[str, float]) -> dict[tuple[str, str], float]:
+    """(source, query) -> share of the ordering weight: a source's share is split among its generators by `weight` (equal
+    when absent, as the factory's); the shares of the sources present are renormalised (no factory -> standard takes all)."""
     present = {g['source'] for g in gens}
     total = sum(shares[s] for s in present)
     w_src = {s: sum(g.get('weight', 1.0) for g in gens if g['source'] == s) for s in present}
-    weight = {(g['source'], g['query']): shares[g['source']] / total * g.get('weight', 1.0) / w_src[g['source']] for g in gens}
+    return {(g['source'], g['query']): shares[g['source']] / total * g.get('weight', 1.0) / w_src[g['source']] for g in gens}
+
+
+def quota_pick(pool: pd.DataFrame, gens: list[dict], n: int, shares: dict[str, float] = SHARES) -> pd.DataFrame:
+    """n distinct events for the insight attempt with a quota per candidate generator: seats ∝ generator weight (largest
+    remainder), each generator gives its best-ranked events not taken yet; seats a generator cannot fill go to the pool
+    order. The pool is already one row per event (a news found by several generators is one candidate). Pool order kept."""
+    if pool.empty or n >= len(pool):
+        return pool.head(n)
+    weight = generator_weights(gens, shares)
+    keys = sorted(weight, key=lambda k: -weight[k])
+    raw = {k: n * weight[k] / sum(weight.values()) for k in keys}
+    seats = {k: int(raw[k]) for k in keys}
+    for k in sorted(keys, key=lambda k: -(raw[k] - seats[k]))[:n - sum(seats.values())]:
+        seats[k] += 1
+    ranked = {k: [] for k in keys}  # generator -> pool rows it found, best rank first
+    for i, gs in enumerate(pool.generators):
+        for g in gs:
+            ranked.setdefault((g['source'], g['query']), []).append((g['rank'], i))
+    taken: list[int] = []
+    for k in keys:
+        free = [i for _, i in sorted(ranked.get(k, [])) if i not in taken]
+        taken += free[:seats[k]]
+    taken += [i for i in range(len(pool)) if i not in taken][:n - len(taken)]
+    return pool.iloc[sorted(taken[:n])]
+
+
+def order(events: pd.DataFrame, picked: dict[int, list[dict]], gens: list[dict], shares: dict[str, float]) -> pd.DataFrame:
+    """Pool rows sorted by priority = Σ over the generators that found the event of weight / (1 + rank)
+    (weights: generator_weights)."""
+    weight = generator_weights(gens, shares)
     res = events.loc[list(picked)].reset_index()
     res = res.assign(generators=[picked[e] for e in res.event], best_rank=[min(x['rank'] for x in picked[e]) for e in res.event],
                      priority=[sum(weight[x['source'], x['query']] / (1 + x['rank']) for x in picked[e]) for e in res.event])

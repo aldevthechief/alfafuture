@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pandas as pd
 from langchain_core.messages import AIMessage
@@ -51,6 +51,10 @@ def consequences():
 
 def decision():
     return calls(call('decide', is_insight=True, score=2, company_link='Кредит', mechanism='Ставка'))
+
+
+def no_duplicates():  # the duplicate gate's verdict: it runs after all judges once two or more decisions are positive
+    return calls(call('Groups', groups=[]))
 
 
 def written():
@@ -134,22 +138,37 @@ class JudgePipelineTests(unittest.TestCase):
         cases = [
             ('judge', 'InsightDecision', [calls(call('decide', is_insight='invalid')),
                                          calls(call('decide', is_insight='invalid'))]),
-            ('writer', 'Insight', [decision(), bad, bad]),
-            ('writer', 'Review', [decision(), written(), bad, bad])]
+            ('writer', 'Insight', [decision(), decision(), no_duplicates(), bad, bad])]
         for stage, schema, script in cases:
             with self.subTest(stage=stage, schema=schema):
-                out = self.run_pipeline([relevance(), consequences(), relevance(), consequences()],
-                                       script + [decision(), written(), reviewed()])
+                # judges first, then the gate, then the writers (24.10)
+                tail = [written(), reviewed()] if stage == 'writer' else [decision(), written(), reviewed()]
+                out = self.run_pipeline([relevance(), consequences(), relevance(), consequences()], script + tail)
                 self.assertEqual(out[0]['status'], 'model_error')
                 self.assertEqual(out[0]['error']['stage'], stage)
                 self.assertEqual(out[0]['error']['schema'], schema)
                 self.assertNotIn('insight', out[0])
                 self.assertEqual(out[1]['status'], 'ready')
+        # a checker with no verdict (2 tries + 2 with less reasoning) publishes the draft marked unchecked (24.10)
+        out = self.run_pipeline([relevance(), consequences(), relevance(), consequences()],
+                                [decision(), decision(), no_duplicates(), written(), bad, bad, bad, bad, written(), reviewed()])
+        self.assertEqual([r['status'] for r in out], ['ready', 'ready'])
+        self.assertEqual(out[0]['review']['issues'], ['проверка по материалам не дала вердикта: инсайт не проверен'])
+
+    def test_duplicate_decisions_are_written_once(self):
+        # both judges say «insight», the gate groups them: one writer call, the other row points to the kept one
+        out = self.run_pipeline([relevance(), consequences(), relevance(), consequences()],
+                                [decision(), decision(), calls(call('Groups', groups=[{'ids': ['0', '1'], 'common': 'ставка'}])),
+                                 written(), reviewed()])
+        self.assertEqual([r['status'] for r in out], ['ready', 'duplicate'])
+        self.assertEqual(out[1]['duplicate_of'], out[0]['news_id'])
+        self.assertEqual(out[0]['merged_duplicates'], [out[1]['news_id']])
+        self.assertNotIn('insight', out[1])
 
     def test_judge_recovers_from_invalid_final_call(self):
         out = self.run_pipeline([relevance(), consequences(), relevance(), consequences()],
-                               [calls(call('decide', is_insight='invalid')), decision(), written(), reviewed(),
-                                decision(), written(), reviewed()])
+                               [calls(call('decide', is_insight='invalid')), decision(), decision(), no_duplicates(),
+                                written(), reviewed(), written(), reviewed()])
         self.assertEqual([r['status'] for r in out], ['ready', 'ready'])
 
     def test_judge_missing_final_answer_is_retried_then_reported(self):
@@ -162,7 +181,8 @@ class JudgePipelineTests(unittest.TestCase):
         for value in (0, None):
             with self.subTest(plausibility=value):
                 out = self.run_pipeline([relevance(), consequences(), relevance(), consequences()],
-                                       [decision(), written(), reviewed()], plausibility=value)
+                                       [decision(), decision(), no_duplicates(), written(), reviewed(), written(),
+                                        reviewed()], plausibility=value)
                 self.assertEqual(len(out), 0 if value == 0 else 2)
                 if value is None:
                     self.assertTrue(all(r['status'] == 'ready' for r in out))
@@ -209,8 +229,7 @@ class AnalystLoopTests(unittest.TestCase):
         self.assertEqual(out[1]['status'], 'ready')
 
     def test_writer_and_checker_failure_do_not_prevent_next_news(self):
-        for schema, script in [('Insight', [AIMessage(content='bad'), AIMessage(content='bad')]),
-                                ('Review', [written(), AIMessage(content='bad'), AIMessage(content='bad')])]:
+        for schema, script in [('Insight', [AIMessage(content='bad'), AIMessage(content='bad')])]:
             with self.subTest(schema=schema):
                 model = ScriptedChatModel(responses=script + [written(), reviewed()])
                 loop = self.loop(InsightWriter(model))
@@ -254,16 +273,23 @@ class ParallelJudgeTests(unittest.TestCase):
         rows = pd.DataFrame([{'id': i, 'title': f't{i}', 'text': 'x', 'date': '2026-10-01', 'source': 's'} for i in range(4)])
         runner = pipeline.InsightPipeline.__new__(pipeline.InsightPipeline)
         runner.related, runner.bank = SimpleNamespace(event_plausibility=lambda i: 1, row_of={}, get=lambda i: {}), None
-        slow = lambda value: (lambda *a, **k: (time.sleep(0.5), seen.append(session.get(None)), value)[2])
-        runner.relevance = Mock(score=slow(Relevance(score=2, role_fit=2)))
-        runner.consequences = Mock(extract=lambda news: {})
-        runner.judge = Mock(decide=slow(InsightDecision(is_insight=False, score=0, company_link='', mechanism='')))
+        import asyncio
+
+        def slow(value):  # an LLM call: awaited, so the calls overlap on one event loop without a thread each
+            async def call(*a, **k):
+                await asyncio.sleep(0.5)
+                seen.append(session.get(None))
+                return value
+            return call
+        runner.relevance = Mock(ascore=slow(Relevance(score=2, role_fit=2)))
+        runner.consequences = Mock(aextract=AsyncMock(return_value={}))
+        runner.judge = Mock(adecide=slow(InsightDecision(is_insight=False, score=0, company_link='', mechanism='')))
         with patch.object(pipeline, 'build', return_value={'x': []}), patch.object(pipeline, 'candidates', return_value=(rows, [])):
             start = time.time()
             out = runner.run('x', 'cfo', 4, 4, workers=4)
         self.assertEqual([r['news_id'] for r in out], [0, 1, 2, 3])
         self.assertLess(time.time() - start, 1.8)  # 8 half-second calls: ~1 s in parallel, 4 s one by one
-        self.assertEqual(seen, ['run-1'] * 8)  # worker threads keep the session
+        self.assertEqual(seen, ['run-1'] * 8)  # every task keeps the run's session
 
 
 if __name__ == '__main__':

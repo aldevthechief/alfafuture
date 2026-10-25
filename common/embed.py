@@ -22,7 +22,7 @@ PREFIX = {'ai-forever/FRIDA': ('search_query: ', 'search_document: '),
 @lru_cache(None)
 def _model(name: str = MODEL):
     from common.encoders import load_encoder
-    return load_encoder(name)
+    return load_encoder(name)  # e5 by the same name/params is the instance retrieval v2 and the bank search use
 
 
 def encode(texts: list[str], kind: str = 'query', name: str = MODEL, batch_size: int = 16) -> np.ndarray:

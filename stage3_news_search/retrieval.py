@@ -8,8 +8,8 @@ from common.search import corpus_fingerprint, news_pool
 from common.news_corpus import StaleNewsReferences
 from stage3_news_search.candidate_generators.generators import candidates as hybrid_candidates
 from stage3_news_search.facet_retrieval.candidates import candidates as lexical_candidates
-from stage3_news_search.retrieval_v2.candidates import candidates as v2_candidates
-from stage3_news_search.retrieval_v3.candidates import candidates as v3_candidates
+from stage3_news_search.retrieval_v2.candidates import SHARES as V2_SHARES, candidates as v2_candidates, quota_pick
+from stage3_news_search.retrieval_v3.candidates import SHARES as V3_SHARES, candidates as v3_candidates
 
 
 def event_news(events: pd.DataFrame, news: pd.DataFrame) -> pd.DataFrame:
@@ -62,7 +62,8 @@ def candidates(company_id: str, role: str, top: int = 30, *, facts: list[dict], 
     if method in ('v2', 'v3'):
         news = news_pool()
         events, generators = (v2_candidates if method == 'v2' else v3_candidates)(company_id, facts, role, news=news)
-        events = events.head(top)  # the pool is ordered by priority: its head mixes the best events of every generator
+        # `top` distinct events with a seat quota per candidate generator (∝ its weight), not just the priority head
+        events = quota_pick(events, generators, top, V2_SHARES if method == 'v2' else V3_SHARES)
         events.attrs['corpus_fingerprint'] = corpus_fingerprint(news)
         return event_news(events, news), generators
     if method != 'hybrid':

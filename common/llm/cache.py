@@ -2,10 +2,10 @@
 (the docker compose run shares the LLM cache and the named caches across containers; the Redis volume
 outlives restarts). `JsonlCache`: append-only key -> JSON value, reused by every company. `FileLLMCache`:
 LangChain cache for every model call (prompt + model + params), plugged into all `ChatModels` models."""
-import asyncio
 import hashlib
 import json
 import os
+import re
 import threading
 
 _CACHE_LOCK = threading.RLock()
@@ -16,7 +16,8 @@ from typing import Any
 
 from langchain_core.caches import BaseCache
 from langchain_core.load import dumps, loads
-from langchain_core.outputs import Generation
+from langchain_core.messages import AIMessage, BaseMessage
+from langchain_core.outputs import ChatGeneration, Generation
 
 from common.data import DATA
 
@@ -56,7 +57,7 @@ class JsonlCache:
 
     def get_or_compute(self, key: str, compute: Callable[[], Any]) -> Any:
         with _CACHE_LOCK:
-            lock = _KEY_LOCKS.setdefault((str(self.path.resolve()), key), threading.Lock())
+            lock = _KEY_LOCKS.setdefault((str(self.path.resolve()), key), threading.RLock())
         with lock:
             with _CACHE_LOCK:
                 self._values = None
@@ -66,27 +67,6 @@ class JsonlCache:
             value = compute()
             self.put(key, value)
             return value
-
-    async def aget_or_compute(self, key: str, compute):
-        """Share sync/async cache misses across runs without a thread waiting on the model."""
-        with _CACHE_LOCK:
-            lock = _KEY_LOCKS.setdefault((str(self.path.resolve()), key), threading.Lock())
-        while not lock.acquire(blocking=False):
-            await asyncio.sleep(0.01)
-        try:
-            def lookup():
-                with _CACHE_LOCK:
-                    self._values = None
-                    values = self._load()
-                    return key in values, values.get(key)
-            found, value = await asyncio.to_thread(lookup)
-            if found:
-                return value
-            value = await compute()
-            await asyncio.to_thread(self.put, key, value)
-            return value
-        finally:
-            lock.release()
 
     def _load(self) -> dict[str, Any]:
         if self._values is not None:
@@ -102,36 +82,69 @@ class JsonlCache:
         return self._values
 
 
+EFFORTS = ['minimal', 'low', 'medium', 'high']  # absent = the model's default; for GLM it reasons the most (~30k tokens)
+_EFFORT = re.compile(r'"reasoning_effort": "(\w+)", ')
+
+
+def stronger(llm_string: str) -> list[str]:
+    """The same model and params with more reasoning, closest first, the model's default last: a cached answer to the
+    same prompt given with more reasoning serves a request with less (24.10: Q&A moved from default to low)."""
+    m = _EFFORT.search(llm_string)
+    if not m or m.group(1) not in EFFORTS:
+        return []
+    more = EFFORTS[EFFORTS.index(m.group(1)) + 1:]
+    return [llm_string.replace(m.group(0), f'"reasoning_effort": "{e}", ') for e in more] + [llm_string.replace(m.group(0), '')]
+
+
+_VOLATILE = ('usage_metadata', 'response_metadata', 'id')  # differ between a live answer and its cached replay
+
+
 def stable_prompt(prompt: str) -> str:
-    """Ignore replay-only metadata of earlier AI turns, keeping their content and tool calls intact."""
+    """The prompt without per-call fields of earlier model answers. LangChain marks a cached answer with
+    usage_metadata {total_cost: 0}: the next step of a tool loop then never matched the live run, and only step 1 of
+    every agent came from the cache (24.10). A prompt without such fields is returned unchanged (old keys stay valid)."""
     try:
         messages = json.loads(prompt)
     except ValueError:
         return prompt
     changed = False
-    for message in messages if isinstance(messages, list) else []:
-        if not isinstance(message, dict):
-            continue
-        identifier = message.get('id')
-        if not isinstance(identifier, list) or not identifier or not str(identifier[-1]).startswith('AIMessage'):
-            continue
-        kwargs = message.get('kwargs', {})
-        for key in ('usage_metadata', 'response_metadata', 'id'):
-            if key in kwargs:
-                del kwargs[key]
-                changed = True
+    for m in messages if isinstance(messages, list) else []:
+        if isinstance(m, dict) and str(m.get('id', [''])[-1]).startswith('AIMessage'):
+            for k in _VOLATILE:
+                changed |= m.get('kwargs', {}).pop(k, None) is not None
     return json.dumps(messages) if changed else prompt
 
 
-def lookup_prompt(get, prompt: str, llm_string: str):
-    stable = stable_prompt(prompt)
-    # Existing entries still work for their original prompt; no destructive cache migration.
-    for candidate in dict.fromkeys((stable, prompt)):
-        value = get(FileLLMCache._key(candidate, llm_string))
-        gens = loads(value, allowed_objects='all') if value is not None else None
-        if gens and FileLLMCache.complete(gens):
+def lookup_any(get: Callable[[str], Any], prompt: str, llm_string: str) -> Sequence[Generation] | None:
+    """First complete cached answer for this request, else for the same prompt with more reasoning."""
+    prompt = stable_prompt(prompt)
+    for candidate in (llm_string, *stronger(llm_string)):
+        v = get(FileLLMCache._key(prompt, candidate))
+        gens = loads(v, allowed_objects='all') if v is not None else None  # our own store, trusted
+        if isinstance(gens, str):  # seeded by scripts_seed_redis.py before 24.10: the dumps string was JSON-encoded once more
+            gens = loads(gens, allowed_objects='all')
+        if gens and FileLLMCache.complete(gens):  # also skips cut answers cached before this check
             return gens
     return None
+
+
+async def astream_cached(model, messages: list[BaseMessage]):
+    """Text chunks of the model's streamed answer, through the model's cache: LangChain's `astream` neither reads nor
+    writes it (24.10: no Q&A answer had ever been cached). A hit — this request or the same prompt with more reasoning —
+    comes as one chunk; a fresh answer is stored whole once the stream ends."""
+    import asyncio
+    cache = model.cache if isinstance(getattr(model, 'cache', None), BaseCache) else None
+    prompt, llm_string = dumps(messages), model._get_llm_string()
+    if cache is not None and (hit := await asyncio.to_thread(cache.lookup, prompt, llm_string)):
+        yield hit[0].text
+        return
+    parts = []
+    async for chunk in model.astream(messages):
+        if chunk.text:
+            parts.append(chunk.text)
+            yield chunk.text
+    if cache is not None and parts:
+        await asyncio.to_thread(cache.update, prompt, llm_string, [ChatGeneration(message=AIMessage(content=''.join(parts)))])
 
 
 class FileLLMCache(BaseCache):
@@ -156,7 +169,7 @@ class FileLLMCache(BaseCache):
         return bool(gens) and all(map(ok, gens))
 
     def lookup(self, prompt: str, llm_string: str) -> Sequence[Generation] | None:
-        return lookup_prompt(self.store.get, prompt, llm_string)
+        return lookup_any(self.store.get, prompt, llm_string)
 
     def update(self, prompt: str, llm_string: str, return_val: Sequence[Generation]) -> None:
         if self.complete(return_val):
@@ -177,7 +190,7 @@ def _redis_llm_cache() -> BaseCache | None:
         """Same request -> same answer from Redis, no API call; the volume keeps them across restarts."""
 
         def lookup(self, prompt: str, llm_string: str) -> Sequence[Generation] | None:
-            return lookup_prompt(lambda field: client.hget(key, field), prompt, llm_string)
+            return lookup_any(lambda k: client.hget(key, k), prompt, llm_string)
 
         def update(self, prompt: str, llm_string: str, return_val: Sequence[Generation]) -> None:
             if FileLLMCache.complete(return_val):

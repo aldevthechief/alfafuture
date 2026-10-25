@@ -11,7 +11,7 @@ import unittest
 from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import numpy as np
 import pandas as pd
@@ -223,19 +223,19 @@ class RetrievalTests(unittest.TestCase):
         with patch.object(retrieval, 'v2_candidates', return_value=(EVENTS, [])) as v2, patch.object(
                 retrieval, 'news_pool', return_value=NEWS), patch.object(pipeline, 'build', return_value={'synthetic': FACTS}):
             runner = pipeline.InsightPipeline.__new__(pipeline.InsightPipeline)
-            runner.relevance = SimpleNamespace(score=Mock(return_value=Relevance(score=2, role_fit=2)))
-            runner.consequences = SimpleNamespace(extract=Mock(return_value={}))
+            runner.relevance = SimpleNamespace(ascore=AsyncMock(return_value=Relevance(score=2, role_fit=2)))
+            runner.consequences = SimpleNamespace(aextract=AsyncMock(return_value={}))
             runner.related = SimpleNamespace(event_plausibility=lambda i: 1, row_of={})
             runner.bank = None
-            runner.judge = SimpleNamespace(decide=Mock(return_value=InsightDecision(
+            runner.judge = SimpleNamespace(adecide=AsyncMock(return_value=InsightDecision(
                 is_insight=True, score=2, company_link='test', mechanism='test')))
-            runner.writer = SimpleNamespace(write=Mock(return_value=(insight(), Review(ok=False, issues=['bad']))))
+            runner.writer = SimpleNamespace(awrite=AsyncMock(return_value=(insight(), Review(ok=False, issues=['bad']))))
             out = runner.run('synthetic', 'cfo', 1, 1)
             self.assertEqual(out[0]['news_id'], 41)
             self.assertEqual(out[0]['retrieval']['event_id'], 999)
             self.assertNotIn('insight', out[0])
             self.assertEqual(out[0]['status'], 'review_rejected')
-            runner.writer.write.return_value = (insight(), Review(ok=True))
+            runner.writer.awrite.return_value = (insight(), Review(ok=True))
             self.assertIn('insight', runner.run('synthetic', 'cfo', 1, 1)[0])
             self.assertTrue(v2.called)
             models = Mock()
@@ -267,7 +267,7 @@ class RetrievalTests(unittest.TestCase):
 
 
 class PublicationTests(unittest.TestCase):
-    def test_scripted_pipeline_keeps_only_approved_insights(self):
+    def test_scripted_pipeline_fixes_a_rejected_draft_once_and_publishes_it(self):
         for ok in (False, True):
             with self.subTest(review_ok=ok), tempfile.TemporaryDirectory() as tmp, patch.object(
                     retrieval, 'v2_candidates', return_value=(EVENTS, [])), patch.object(
@@ -279,9 +279,8 @@ class PublicationTests(unittest.TestCase):
                 script = [calls(tool_call('decide', is_insight=True, score=2, company_link='Кредит', mechanism='Ставка')),
                           calls(tool_call('Insight', **insight().model_dump())),
                           calls(tool_call('Review', ok=ok, issues=[] if ok else ['Ошибка']))]
-                if not ok:  # two rewrites, each checked again
-                    script += [calls(tool_call('Insight', **insight().model_dump())),
-                               calls(tool_call('Review', ok=False, issues=['Ошибка осталась']))] * 2
+                if not ok:  # one fix in the same dialog, no second check (24.10)
+                    script += [calls(tool_call('Insight', **insight().model_dump()))]
                 agent = ScriptedChatModel(responses=script)
                 related = SimpleNamespace(event_plausibility=lambda i: 1, row_of={},
                                           get=lambda i: NEWS[NEWS.id == i].iloc[0].to_dict())
@@ -290,8 +289,9 @@ class PublicationTests(unittest.TestCase):
                 out = runner.run('synthetic', 'cfo', 1, 1)
                 self.assertEqual(out[0]['news_id'], 41)
                 self.assertEqual(out[0]['retrieval']['event_id'], 999)
-                self.assertEqual('insight' in out[0], ok)
-                self.assertEqual('draft' in out[0], not ok)
+                self.assertIn('insight', out[0])
+                self.assertEqual(out[0]['status'], 'ready')
+                self.assertEqual(out[0]['review']['issues'], [] if ok else ['исправлено по проверке: Ошибка'])
                 self.assertEqual(cheap.i, 0)
                 self.assertEqual(agent.i, 0)
 

@@ -11,7 +11,7 @@ from stage6_insight_generation.insight_writer import insight as v1
 from stage6_insight_generation.insight_writer import insight_v2 as v2
 
 # 1. the news contract: every v1 insight of the demo feed survives v1 -> v2 -> v1 unchanged, and v1 JSON loads into v2 as it is
-feed = json.loads((Path(__file__).resolve().parents[3] / 'frontend/public/feed.json').read_text(encoding='utf-8'))
+feed = json.loads((Path(__file__).resolve().parents[3] / 'tests/fixtures/feed_v1_insights.json').read_text(encoding='utf-8'))
 found = []
 def walk(o):
     if isinstance(o, dict):

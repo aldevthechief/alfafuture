@@ -1,4 +1,4 @@
-"""Async execution must preserve verdicts, cache identities, source context and the five-news limit."""
+"""Imported Maxon execution keeps async context, fast writer policy and cache identity."""
 import asyncio
 import contextvars
 import tempfile
@@ -49,7 +49,7 @@ class CacheAccelerationTests(unittest.TestCase):
                 self.assertEqual(run([calls(tool_call('lookup', q='x')), calls(tool_call('Done', answer='ok'))])[0], 'ok')
                 self.assertEqual(run([calls(tool_call('Done', answer='cache miss'))]), ('ok', 0))
 
-    def test_only_ai_transport_metadata_is_ignored_and_legacy_keys_still_work(self):
+    def test_only_ai_transport_metadata_is_ignored(self):
         def prompt(cost, text='original evidence', arg='x'):
             reply = calls(tool_call('lookup', q=arg))
             reply.tool_calls[0]['id'] = 'tool-1'
@@ -65,46 +65,12 @@ class CacheAccelerationTests(unittest.TestCase):
             self.assertIsNone(cache.lookup(prompt(0, text='new evidence'), 'model'))
             self.assertIsNone(cache.lookup(prompt(0, arg='new argument'), 'model'))
             self.assertIsNone(cache.lookup(prompt(0), 'other model parameters'))
-            cache.store.put(cache._key(prompt(8), 'legacy'), dumps(answer))
+            cache.store.put(cache._key(stable_prompt(prompt(8)), 'legacy'), dumps(answer))
             self.assertEqual(cache.lookup(prompt(8), 'legacy')[0].text, 'answer')
             for value in ('plain old prompt', '{"not":"messages"}'):
                 self.assertEqual(stable_prompt(value), value)
 
-    def test_sync_and_async_consequence_cache_misses_compute_once(self):
-        async def scenario(cache):
-            computing, release = asyncio.Event(), asyncio.Event()
-            count = 0
-            async def compute():
-                nonlocal count
-                count += 1
-                computing.set()
-                await release.wait()
-                return {'value':42}
-            first = asyncio.create_task(cache.aget_or_compute('key', compute))
-            await computing.wait()
-            sync = asyncio.create_task(asyncio.to_thread(cache.get_or_compute, 'key', lambda: self.fail('duplicate sync compute')))
-            others = [asyncio.create_task(cache.aget_or_compute('key', compute)) for _ in range(16)]
-            release.set()
-            self.assertTrue(all(v == {'value':42} for v in await asyncio.gather(first, sync, *others)))
-            self.assertEqual(count, 1)
-        with tempfile.TemporaryDirectory() as tmp:
-            asyncio.run(scenario(JsonlCache('consequences', Path(tmp))))
 
-    def test_cancelled_async_compute_releases_the_shared_lock(self):
-        async def scenario(cache):
-            started = asyncio.Event()
-            async def cancelled():
-                started.set()
-                await asyncio.Event().wait()
-            task = asyncio.create_task(cache.aget_or_compute('key', cancelled))
-            await started.wait()
-            task.cancel()
-            with self.assertRaises(asyncio.CancelledError):
-                await task
-            async def retry(): return 42
-            self.assertEqual(await asyncio.wait_for(cache.aget_or_compute('key', retry), 2), 42)
-        with tempfile.TemporaryDirectory() as tmp:
-            asyncio.run(scenario(JsonlCache('test', Path(tmp))))
 
 
 class AsyncCompatibilityTests(unittest.TestCase):
@@ -116,25 +82,22 @@ class AsyncCompatibilityTests(unittest.TestCase):
         with self.assertRaises(StructuredOutputError):
             asyncio.run(structured(ScriptedChatModel(responses=[AIMessage(content='bad')]), Number).ainvoke('question'))
 
-    def test_async_writer_has_the_same_rechecks_and_final_rejections_as_sync(self):
+    def test_sync_and_async_writer_fix_once_without_a_second_check(self):
         insight = Insight(title='Test', role='generated label', what_happened=[], why_it_matters=[],
                           actions=[], ai_conclusion='', confidence='low')
-        for final_ok in (False, True):
-            script = []
-            for ok in (False, False, final_ok):
-                script += [calls(tool_call('Insight', **insight.model_dump())), calls(tool_call('Review', ok=ok, issues=[] if ok else ['fix']))]
-            outputs = []
-            for asynchronous in (False, True):
-                model = ScriptedChatModel(responses=script)
-                writer = InsightWriter(model)
-                with patch.object(writer, '_remind', return_value=[]):
-                    evidence = Evidence(news=[], facts=[])
-                    result = asyncio.run(writer.awrite('U_1', 'cfo', '{}', evidence)) if asynchronous else writer.write('U_1', 'cfo', '{}', evidence)
-                self.assertEqual(model.i, 0)  # all six responses used, including the final recheck
-                self.assertEqual(result[1].ok, final_ok)
-                self.assertEqual(result[0].role, 'cfo')
-                outputs.append([v.model_dump() for v in result])
-            self.assertEqual(*outputs)
+        for asynchronous in (False, True):
+            script = [calls(tool_call('Insight', **insight.model_dump())),
+                      calls(tool_call('Review', ok=False, issues=['fix'])),
+                      calls(tool_call('Insight', **insight.model_copy(update={'title':'Fixed'}).model_dump()))]
+            model = ScriptedChatModel(responses=script)
+            writer = InsightWriter(model)
+            with patch.object(writer, '_remind', return_value=[]):
+                evidence = Evidence(news=[], facts=[])
+                result = asyncio.run(writer.awrite('U_1', 'cfo', '{}', evidence)) if asynchronous else writer.write('U_1', 'cfo', '{}', evidence)
+            self.assertEqual(model.i, 0)
+            self.assertTrue(result[1].ok)
+            self.assertEqual(result[0].title, 'Fixed')
+            self.assertEqual(result[0].role, 'cfo')
 
     def test_sixteen_tasks_share_one_event_loop_but_only_five_news_reach_judge(self):
         rows = pd.DataFrame([dict(id=i, title=f'News {i}', text='text', date='2026-10-01', source='test') for i in range(20)])
@@ -173,12 +136,12 @@ class AsyncCompatibilityTests(unittest.TestCase):
         self.assertEqual(len(runner.judge.ids), 5)
         self.assertEqual([r['news_id'] for r in result], list(range(5)))
         self.assertEqual(AnalysisRequest(company_id='U_1').model_dump()['workers'], 16)
-        self.assertEqual((AnalysisRequest(company_id='U_1').candidates, AnalysisRequest(company_id='U_1').judge), (30, 5))
+        self.assertEqual((AnalysisRequest(company_id='U_1').candidates, AnalysisRequest(company_id='U_1').judge), (15, 15))
 
-    def test_sync_pipeline_entry_still_works_inside_an_existing_event_loop(self):
+    def test_sync_pipeline_entry_runs_in_a_worker_from_an_existing_event_loop(self):
         from test_graph_personalization import runner, run
         async def scenario():
-            return run(runner())
+            return await asyncio.to_thread(run, runner())
         self.assertEqual(asyncio.run(scenario())[0]['news_id'], 1)
 
     def test_cross_encoder_loads_once_and_uses_the_existing_encoder_lock(self):

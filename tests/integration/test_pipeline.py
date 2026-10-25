@@ -55,9 +55,8 @@ agent = ScriptedChatModel(responses=[
     calls(c('decide', is_insight=True, score=2, company_link='кредитные продукты', mechanism='ключевая ставка и стоимость кредитов',
             bank_view='пауза 14% до конца 2026 (11.09.2026, p.1)', related_news_ids=[])),
     calls(c('Insight', **insight)),
-    calls(c('Review', ok=False, issues=['действие без срока'])),  # forces one revision
-    calls(c('Insight', **insight)),
-    calls(c('Review', ok=True)),
+    calls(c('Review', ok=False, issues=['действие без срока'])),  # forces the one fix in the same dialog
+    calls(c('Insight', **insight)),  # the fixed draft is final: no second check
 ])
 consequences = ConsequenceExtractor(cheap, cache=JsonlCache('consequences', folder=tmp))
 results = InsightPipeline(cheap, agent, consequences=consequences, bank=bank).run(
@@ -65,6 +64,7 @@ results = InsightPipeline(cheap, agent, consequences=consequences, bank=bank).ru
 
 assert len(results) == 1 and results[0]['decision']['is_insight'], results
 assert results[0]['insight']['title'] == 'Дорогой долг дольше' and results[0]['review']['ok'], results[0]
+assert results[0]['review']['issues'] == ['исправлено по проверке: действие без срока'], results[0]['review']
 assert results[0]['stage4']['consequences']['status'] == 'fact'
 assert cheap.i == 0 and agent.i == 0, 'scripts must be consumed exactly'
 print('ok: prompts render; bank search prefers fresh reports; stages 2-6 produce a reviewed insight; news:', results[0]['title'][:60])

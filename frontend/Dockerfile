@@ -4,7 +4,7 @@ WORKDIR /app
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
 COPY frontend/ ./
-ARG CABINET_MODE=server
+ARG CABINET_MODE=full
 ENV VITE_CABINET_MODE=$CABINET_MODE
 ENV VITE_API_URL=.
 ENV VITE_FEEDBACK_API=/feedback

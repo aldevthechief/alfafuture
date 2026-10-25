@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import ValidationError
 
 from backend.jobs import QueueFull
-from backend.cabinet import cached_job, catalog as cabinet_catalog, search_companies
+from backend.cabinet import cached_job, cabinet_feed, catalog as cabinet_catalog, search_companies
 from backend.insight_previews import detail, metadata, preview_feed
 from backend.schemas import AnalysisRequest, AskRequest, BatchRequest, PreparationRequest, SearchRequest, JobResponse
 from backend.service import Service
@@ -25,7 +25,7 @@ from stage5_insight_detection.bank_analytics.ocr import PDF_DIR
 def create_app(service=None, cors_origins=None):
     @asynccontextmanager
     async def lifespan(app):
-        app.state.service=service or Service(checkpointing=True, agent_workers=1)
+        app.state.service=service or Service(checkpointing=True, agent_workers=1, auto_compact=True)
         # Warm/import each original report independently in the background; uploaded PDFs never touch that folder.
         if (service is None and os.environ.get('CABINET_MODE', 'full') != 'server'
                 and os.environ.get('API_PREPARE_ON_START', '1') == '1'):
@@ -112,7 +112,7 @@ def create_app(service=None, cors_origins=None):
             return project(job)
         try:
             if job_id.startswith('demo-'):
-                return project(cached_job(job_id))
+                return project(cached_job(job_id, svc().root))
             return svc().agents.get(job_id, project=owned)
         except (KeyError, FileNotFoundError):
             raise HTTPException(404, 'Unknown insight')
@@ -122,8 +122,19 @@ def create_app(service=None, cors_origins=None):
         return insight_projection(job_id, x_user_id, preview_feed)
 
     @app.get('/v1/jobs/{job_id}/insights/{result_index}',tags=['jobs'])
-    def insight_detail(job_id: str, result_index: int, x_user_id: User = None):
-        return insight_projection(job_id, x_user_id, lambda job: detail(job, result_index))
+    def insight_detail(job_id: str, result_index: int, x_user_id: User = None, insight_id: str | None = None):
+        return insight_projection(job_id, x_user_id, lambda job: detail(job, result_index, insight_id))
+
+    @app.get('/v1/jobs/{job_id}/compact',tags=['jobs'],summary='Screen versions of the insights of a finished analysis')
+    async def compact(job_id: str, x_user_id: User = None):
+        require_inference()
+        import asyncio
+        try:
+            if svc().agents.get(job_id, project=metadata)['request'].get('user_id') not in (None, x_user_id):
+                raise KeyError(job_id)
+            return await asyncio.to_thread(svc().compact, job_id)
+        except KeyError as exc:
+            raise HTTPException(404, 'Unknown job') from exc
 
     @app.get('/v1/jobs',tags=['jobs'])
     def jobs(x_user_id: User = None, include_results: bool = True):
@@ -136,9 +147,20 @@ def create_app(service=None, cors_origins=None):
     def reports():
         with svc().catalog.lock: return dict(active=dict(svc().catalog.current))
 
+    def cabinet_jobs():
+        with svc().agents.lock:
+            return tuple(dict(job) for job in svc().agents.items.values())
+
     @app.get('/v1/cabinet/accounts',tags=['companies'])
-    def cabinet_accounts():
-        return cabinet_catalog()
+    def cabinet_accounts(x_user_id: User = None):
+        return cabinet_catalog(cabinet_jobs(), x_user_id, svc().root)
+
+    @app.get('/v1/cabinet/feed',tags=['companies'])
+    def reader_feed(company_id: str, role: str, x_user_id: User = None):
+        try:
+            return cabinet_feed(company_id, role, cabinet_jobs(), x_user_id, svc().root)
+        except ValueError:
+            raise HTTPException(422, 'Invalid company or role')
 
     @app.get('/v1/cabinet/companies',tags=['companies'])
     def cabinet_companies(q: str = ''):
@@ -195,12 +217,13 @@ def create_app(service=None, cors_origins=None):
 
     @app.post('/v1/insights/ask', response_class=StreamingResponse, tags=['agents'],
               summary='Вопрос по готовому инсайту: ответ стримится токен за токеном')
-    def ask_question(body: AskRequest):
+    def ask_question(body: AskRequest, x_user_id: User = None):
         require_inference()
         from backend.service import Service  # noqa: F401 - the request reaches the same service state
-        def gen():
+        async def gen():
             try:
-                yield from svc().ask(body.company_id, body.role, body.question, body.insight_title)
+                async for chunk in svc().ask(body.company_id, body.role, body.question, body.insight_title, x_user_id):
+                    yield chunk
             except Exception as exc:
                 yield f'\n[ошибка] {type(exc).__name__}: {exc}'
         return StreamingResponse(gen(), media_type='text/plain; charset=utf-8')
