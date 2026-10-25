@@ -14,10 +14,13 @@ import math
 import numpy as np
 
 
+MISSED = 10 ** 6  # rank of a labelled item the retriever did not return: past every k, tied with the other missed ones
+
+
 def ranks_of(ranking: list, ids) -> dict:
-    """Rank (1-based) of every labelled id in the returned list; an id the retriever did not return ranks last (len + 1)."""
+    """Rank (1-based) of every labelled id in the returned list; an id the retriever did not return gets MISSED."""
     pos = {n: r for r, n in enumerate(ranking, 1)}
-    return {i: pos.get(i, len(ranking) + 1) for i in ids}
+    return {i: pos.get(i, MISSED) for i in ids}
 
 
 def dcg(gains: list[float], k: int) -> float:
@@ -32,7 +35,8 @@ def evaluate_ranks(rank: dict, labels: dict, ks: tuple = (15, 30, 100), strata: 
     for k in ks:
         out[f'recall@{k}'] = sum(rank[p] <= k for p in pos) / len(pos) if pos else None
         out[f'fpr@{k}'] = sum(rank[n] <= k for n in neg) / len(neg) if neg else None
-    order = [labels[i] for i in sorted(labels, key=lambda i: rank[i])]  # the labelled items in the retriever's order
+    # ndcg / map / mrr: the labelled items the retriever returned, in its order (missed ones have no order among themselves)
+    order = [labels[i] for i in sorted(labels, key=lambda i: rank[i]) if rank[i] != MISSED]
     top = ks[0]
     ideal = sorted(order, reverse=True)
     out[f'ndcg@{top}'] = dcg(order, top) / dcg(ideal, top) if dcg(ideal, top) else None

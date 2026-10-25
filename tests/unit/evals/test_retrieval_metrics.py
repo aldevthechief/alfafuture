@@ -1,6 +1,6 @@
 """Ranking metrics of the golden-set evaluation and the leakage diagnostic."""
 from evals.retrieval_golden.leakage import leakage
-from evals.retrieval_golden.metrics import bootstrap, evaluate, ranks_of
+from evals.retrieval_golden.metrics import MISSED, bootstrap, evaluate, ranks_of
 
 LABELS = {'p1': 1, 'p2': 1, 'p3': 1, 'n1': 0, 'n2': 0}
 
@@ -16,9 +16,9 @@ def test_perfect_and_worst_rankings():
 
 
 def test_items_the_retriever_did_not_return_rank_last_and_tie():
-    ranking = ['p1', 'x1', 'x2']  # p2, p3, n1, n2 are missing: all rank 4
+    ranking = ['p1', 'x1', 'x2']  # p2, p3, n1, n2 are missing
     r = ranks_of(ranking, LABELS)
-    assert r == {'p1': 1, 'p2': 4, 'p3': 4, 'n1': 4, 'n2': 4}
+    assert r == {'p1': 1, 'p2': MISSED, 'p3': MISSED, 'n1': MISSED, 'n2': MISSED}
     m = evaluate(ranking, LABELS, ks=(3,))
     assert m['recall@3'] == 1 / 3 and m['fpr@3'] == 0.0
     assert abs(m['auc'] - (2 * 1.0 + 4 * 0.5) / 6) < 1e-9  # p1 beats both negatives; two missing positives tie with them
