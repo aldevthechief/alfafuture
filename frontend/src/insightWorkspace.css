@@ -94,6 +94,7 @@
 .chat-answer-copy {user-select:text;cursor:text}
 .chat-answer-copy p {margin-bottom:14px}
 .chat-answer-copy p:last-child {margin-bottom:0}
+.chat-streaming-answer {white-space:pre-wrap;overflow-wrap:anywhere}
 .chat-streaming-answer p {white-space:pre-wrap;overflow-wrap:anywhere;margin-bottom:14px}
 .chat-streaming-caret {display:inline-block;width:6px;height:16px;border-radius:2px;background:var(--agent-accent);animation:stream-caret .85s ease infinite alternate}
 @keyframes stream-caret {from{opacity:.2}to{opacity:1}}
