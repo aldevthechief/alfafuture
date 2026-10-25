@@ -2,14 +2,15 @@ import React, { useEffect, useState } from 'react';
 import { ALLOW_INFERENCE } from './cabinetMode.js';
 import { cabinetAccounts, searchCompanies, startAnalysis } from './api.js';
 import './accountChooser.css';
+import { accountSession, companyLabel } from './accountSession.js';
 
 const MAIN_ROLES = [['ceo', 'Генеральный директор', 'CEO'], ['cfo', 'Финансовый директор', 'CFO'],
   ['marketing', 'Директор по маркетингу', 'Маркетинг']];
 const Arrow = () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>;
 const Check = () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m5 12 4 4 10-10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>;
 
-export default function AccountChooser({ onEnter, previous }) {
-  const [catalog, setCatalog] = useState(null);
+export default function AccountChooser({ onEnter, previous, themeToggle, initialCatalog, onBack }) {
+  const [catalog, setCatalog] = useState(initialCatalog || null);
   const [selected, setSelected] = useState(previous?.account_id || '');
   const [roleFilter, setRoleFilter] = useState('all');
   const [custom, setCustom] = useState(false);
@@ -20,10 +21,13 @@ export default function AccountChooser({ onEnter, previous }) {
   const [matches, setMatches] = useState([]);
   const [searching, setSearching] = useState(false);
   const [company, setCompany] = useState(null);
-  const [name, setName] = useState('');
   const [role, setRole] = useState('cfo');
 
   useEffect(() => {
+    if (initialCatalog && retry === 0) {
+      setSelected(id => initialCatalog.accounts.some(account => account.id === id) ? id : initialCatalog.accounts[0]?.id || '');
+      return;
+    }
     let active = true;
     setError('');
     cabinetAccounts().then(data => {
@@ -32,7 +36,7 @@ export default function AccountChooser({ onEnter, previous }) {
       setSelected(id => data.accounts.some(account => account.id === id) ? id : data.accounts[0]?.id || '');
     }).catch(err => active && setError(err.message));
     return () => { active = false; };
-  }, [retry]);
+  }, [retry, initialCatalog]);
 
   useEffect(() => {
     if (!custom || company || query.trim().length < 2) { setMatches([]); setSearching(false); return; }
@@ -52,8 +56,7 @@ export default function AccountChooser({ onEnter, previous }) {
 
   function enterCached() {
     if (!active || busy) return;
-    onEnter({ kind:'cached', account_id:active.id, company_id:active.company_id, role:active.role,
-      role_title:active.role_title, job_id:active.job_id, company:active });
+    onEnter(accountSession(active));
   }
 
   async function enterCustom(event) {
@@ -65,15 +68,15 @@ export default function AccountChooser({ onEnter, previous }) {
         analytics_cache_only:false, analytics_refresh:true });
       onEnter({ kind:'live', company_id:company.id, role,
         role_title:catalog.roles.find(item => item.id === role)?.title || role, job_id:job.id,
-        company:{ id:company.id, name:name.trim() || company.name, sector:company.industry, city:company.city,
-          initials:(name.trim() || 'Компания').slice(0, 2).toUpperCase(), color:'blue' } });
+        company:{ id:company.id, name:companyLabel(company), sector:company.industry, city:company.city,
+          initials:company.industry?.slice(0, 2).toUpperCase() || 'К', color:'blue' } });
     } catch (err) { setError(err.message); setBusy(false); }
   }
 
   return <main className="entry">
     <header className="entry-header">
       <div className="entry-brand"><span className="entry-logo" aria-hidden="true">А<span /></span>Альфа-Бизнес<span className="entry-brand-divider" /><span className="entry-brand-product">Инсайты</span></div>
-      <span className="entry-demo-label"><span />Демо-кабинет</span>
+      <div className="entry-header-actions">{onBack && <button className="entry-back-to-cabinet" onClick={onBack}>← В кабинет</button>}{themeToggle}<span className="entry-demo-label"><span />Демо-кабинет</span></div>
     </header>
     <div className="entry-layout">
       <section className="entry-story" aria-labelledby="entry-story-title">
@@ -101,17 +104,15 @@ export default function AccountChooser({ onEnter, previous }) {
           <h2 id="entry-title">Новая компания.<br />Ваши приоритеты.</h2>
           <p className="entry-intro">Выберите компанию из данных кейса и вашу должность. Подготовим персональный анализ.</p>
           <form onSubmit={enterCustom} className="entry-form">
-            <label className="entry-field">Компания<input value={query} placeholder="ID компании или отрасль, например U_3263"
+            <label className="entry-field">Компания<input value={query} placeholder="Номер компании или отрасль, например 3263"
               disabled={busy} autoComplete="off" onChange={event => { setQuery(event.target.value); setCompany(null); setError(''); }} /></label>
             {searching && <p className="entry-search-note" role="status">Ищем компанию…</p>}
             {!company && matches.length > 0 && <div className="entry-matches" aria-label="Найденные компании">{matches.map(item =>
-              <button key={item.id} type="button" onClick={() => { setCompany(item); setQuery(`${item.name} · ${item.city}`); setMatches([]); }}>
-                <strong>{item.name}</strong><small>{item.industry} · {item.city}</small>
+              <button key={item.id} type="button" onClick={() => { setCompany(item); setQuery(`${companyLabel(item)} · ${item.city}`); setMatches([]); }}>
+                <strong>{companyLabel(item)}</strong><small>{item.industry} · {item.city}</small>
               </button>)}</div>}
             {!company && query.trim().length >= 2 && !searching && !matches.length && <p className="entry-search-note">Выберите компанию из результатов поиска. Доступны компании из данных кейса.</p>}
             {company && <div className="entry-company-selected"><Check /><span>{company.industry}</span></div>}
-            <label className="entry-field">Название в кабинете <span className="entry-optional">необязательно</span><input value={name} maxLength={80} disabled={busy}
-              placeholder="Например, Сибирская транспортная группа" onChange={event => setName(event.target.value)} /></label>
             <fieldset className="entry-roles"><legend>Ваша должность</legend>{MAIN_ROLES.map(([id, title, short]) =>
               <button type="button" key={id} className={role === id ? 'is-selected' : ''} aria-pressed={role === id}
                 disabled={busy} title={title} onClick={() => setRole(id)}>{short}</button>)}</fieldset>
@@ -135,7 +136,7 @@ export default function AccountChooser({ onEnter, previous }) {
             {filtered.map(account => <button key={account.id} className={`entry-account ${selected === account.id ? 'is-selected' : ''}`}
               aria-pressed={selected === account.id} onClick={() => setSelected(account.id)}>
               <span className={`entry-avatar entry-avatar-${account.color}`}>{account.initials}</span>
-              <span className="entry-account-content"><strong>{account.name}</strong><span>{account.role_title}</span><small>{account.sector}<i />{account.insight_count} инсайтов</small></span>
+              <span className="entry-account-content"><strong>{companyLabel(account)}</strong><span>{account.role_title}</span><small>{account.sector}<i />{account.insight_count} инсайтов</small></span>
               <span className="entry-account-check">{selected === account.id ? <Check /> : <Arrow />}</span>
             </button>)}
           </div>
@@ -143,7 +144,7 @@ export default function AccountChooser({ onEnter, previous }) {
           {catalog && !accounts.length && <p className="entry-error">Готовые кабинеты пока недоступны. Проверьте наличие сохранённых анализов на сервере.</p>}
           <button className="entry-primary" onClick={enterCached} disabled={!active}>Продолжить<Arrow /></button>
           {ALLOW_INFERENCE && <button className="entry-custom" disabled={!catalog} onClick={() => { setCustom(true); setError(''); }}><span>＋</span><div><strong>Другая компания?</strong><small>Подготовим анализ под вашу задачу</small></div><Arrow /></button>}
-          <p className="entry-footnote">Готовые кабинеты открываются без ожидания.<br />Названия компаний в демо условные.</p>
+          <p className="entry-footnote">Готовые кабинеты открываются без ожидания.<br />Компании обозначены по виду деятельности и ID из данных кейса.</p>
         </>}
       </section>
     </div>

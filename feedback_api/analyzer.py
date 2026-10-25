@@ -27,7 +27,7 @@ class FeedbackAnalyzer:
         self.model, self.research_factory, self.max_steps = model, research_factory or ResearchTools, max_steps
         self.cache = cache
 
-    def analyze(self, insight: InsightRecord, feedback: FeedbackRecord, history: list[FeedbackRecord]) -> AnalysisDetails:
+    def analyze(self, insight: InsightRecord, feedback: FeedbackRecord, history: list[FeedbackRecord], on_response=None) -> AnalysisDetails:
         status = 'captured' if insight.evidence is not None else 'missing'
         if not feedback.comment and feedback.kind in RULES:
             response, action = RULES[feedback.kind]
@@ -104,11 +104,14 @@ class FeedbackAnalyzer:
                     except InvalidAnalysis:
                         pass
                     else:
-                        return AnalysisDetails.model_validate(_replace_refs(cached.model_dump(), restore))
+                        answer = AnalysisDetails.model_validate(_replace_refs(cached.model_dump(), restore))
+                        if on_response is not None:
+                            on_response(answer.response)
+                        return answer
                 # A stale cache replay must not spend the fresh answer's research budget.
                 research = self.research_factory(insight)
                 tools = research.as_tools()
-        loop = DiscussionLoop(model, tools, Analysis, messages[0].content, max_steps=self.max_steps,
+        loop = DiscussionLoop(model, tools, Analysis, messages[0].content, max_steps=self.max_steps, on_response=on_response,
                               validate_answer=validate, nudge='Вызови нужный инструмент или финальный инструмент Analysis.')
         result = loop.run(messages[1].content)
         if result is None:

@@ -1,0 +1,42 @@
+:root {
+  color-scheme: light;
+  --signal-negative: #b42318;
+  --signal-negative-bg: #fff3f1;
+  --signal-positive: #137448;
+  --signal-positive-bg: #edf9f1;
+  --signal-important: #974000;
+  --signal-important-bg: #fff2df;
+  --entry-selected-bg: #fff9f7;
+  --entry-note-bg: #f6f7f9;
+  --entry-purple-bg: #f4f0ff;
+  --entry-purple: #7861aa;
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #101114; --card: #1b1d21; --fill: #292c32; --fill-hover: #353941;
+  --text: #f2f3f5; --text-2: #b5bbc5; --text-3: #9ba3af; --icon: #a7afbb;
+  --line: #363a42; --blue: #85b4ff; --green: #64dba2; --green-bg: #173828; --purple: #b4a0ff;
+  --signal-negative: #ff9188; --signal-negative-bg: #301d20;
+  --signal-positive: #64dba2; --signal-positive-bg: #183126;
+  --signal-important: #ffc278; --signal-important-bg: #382b19;
+  --entry-selected-bg: #321f20; --entry-note-bg: #24272d;
+  --entry-purple-bg: #302940; --entry-purple: #c4aff0;
+}
+.theme-toggle {display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:40px;padding:8px 12px;
+  border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--text);white-space:nowrap;font-size:13px}
+.theme-toggle:hover {background:var(--fill)}
+.entry-header-actions {display:flex;align-items:center;gap:12px}
+.top-btn svg,.who-btn>svg {color:var(--text-2);fill:currentColor}
+.side-tile:hover {background:var(--card)}
+.fchip.on {color:var(--card)}
+.discussion-error {color:var(--signal-negative)}
+:root[data-theme="dark"] .promo-card {background:#233c50}
+:root[data-theme="dark"] .promo-bonus {background:#493128}
+:root[data-theme="dark"] .mount-empty {background:#1b2b43}
+:root[data-theme="dark"] .entry-avatar-blue {background:#25324a;color:#b0c6ee}
+:root[data-theme="dark"] .entry-avatar-amber {background:#3d3122;color:#ebc58c}
+:root[data-theme="dark"] .entry-avatar-green {background:#21392e;color:#9cd3b7}
+@media(max-width:600px) {
+  .theme-toggle>span:last-child {display:none}
+  .entry-header-actions {gap:6px}
+}

@@ -10,13 +10,17 @@ import hmac
 import logging
 import os
 import re
+import json
+import queue
+import threading
+from weakref import WeakValueDictionary
 from contextlib import asynccontextmanager
 from typing import Annotated
 from uuid import UUID
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from common.personalization import Personalization, feedback_db
@@ -48,6 +52,8 @@ def create_app(store: Store | None = None, analyzer=None, api_token: str | None 
     app.add_middleware(CORSMiddleware, allow_origins=ORIGINS, allow_methods=['GET', 'POST', 'DELETE'],
                        allow_headers=['Content-Type', 'X-User-ID', 'Authorization'])
     processor = analyzer if analyzer is not None else FeedbackAnalyzer()
+    stream_locks = WeakValueDictionary()
+    stream_locks_guard = threading.Lock()
     token = api_token if api_token is not None else os.environ.get('FEEDBACK_API_TOKEN', '')
 
     def user(x_user_id: Annotated[str, Header(max_length=100)], authorization: Annotated[str | None, Header()] = None) -> str:
@@ -130,6 +136,54 @@ def create_app(store: Store | None = None, analyzer=None, api_token: str | None 
             kind=Kind.question, comment=body.question, request_id=body.request_id,
             scope=Scope.future if body.remember else Scope.insight))
         return analyze(user_id, record)
+
+    @app.post('/v1/insights/{insight_id}/ask/stream', response_class=StreamingResponse)
+    def ask_stream(insight_id: UUID, body: Question, user_id: User):
+        """Real model text chunks, followed by a validated and persisted FeedbackRecord.
+
+        The worker finishes saving even if the browser disconnects; a retry uses the same request_id.
+        """
+        require_inference()
+        record = app.state.store.add(user_id, str(insight_id), FeedbackInput(
+            kind=Kind.question, comment=body.question, request_id=body.request_id,
+            scope=Scope.future if body.remember else Scope.insight))
+        with stream_locks_guard:
+            lock = stream_locks.setdefault(record.id, threading.Lock())
+        events = queue.Queue()
+
+        def work():
+            try:
+                with lock:
+                    current = app.state.store.feedback(user_id, record.id)
+                    if current.analysis is None:
+                        insight = app.state.store.insight(user_id, current.insight_id)
+                        history = app.state.store.recent(user_id, current)
+                        result = processor.analyze(insight, current, history,
+                            on_response=lambda text: events.put(('text', {'text': text})))
+                        current = app.state.store.save_analysis(user_id, current.id, result)
+                    events.put(('complete', current.model_dump(mode='json')))
+            except Exception as exc:
+                log.warning('streamed analysis failed: %s', type(exc).__name__)
+                status = 503 if str(exc).startswith('set LLM_API_KEY') else 502
+                events.put(('error', {'status': status, 'message': 'Answer unavailable; the message is saved, retry later'}))
+            finally:
+                events.put(None)
+
+        def generate():
+            threading.Thread(target=work, daemon=True).start()
+            while True:
+                try:
+                    event = events.get(timeout=15)
+                except queue.Empty:
+                    yield ': keep-alive\n\n'
+                    continue
+                if event is None:
+                    break
+                name, data = event
+                yield f'event: {name}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n'
+
+        return StreamingResponse(generate(), media_type='text/event-stream',
+                                 headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
 
     @app.get('/v1/insights/{insight_id}/feedback', response_model=list[FeedbackRecord])
     def history(insight_id: UUID, user_id: User, limit: int = Query(50, ge=1, le=100), offset: int = Query(0, ge=0)):

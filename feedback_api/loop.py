@@ -9,12 +9,36 @@ from common.llm.tool_loop import ToolLoop, json_args
 
 
 class DiscussionLoop(ToolLoop):
-    def __init__(self, *args, validate_answer, **kwargs):
+    def __init__(self, *args, validate_answer, on_response=None, **kwargs):
         self.validate_answer = validate_answer
+        self.on_response = on_response
         super().__init__(*args, **kwargs)
 
     def _think(self, state):
-        delta = super()._think(state)
+        if self.on_response is None:
+            delta = super()._think(state)
+        else:
+            from langchain_core.messages import SystemMessage, message_chunk_to_message
+            from langchain_core.utils.json import parse_partial_json
+            reply = None
+            previous = ''
+            for chunk in self.model.stream([SystemMessage(self.system_prompt), *state['messages']]):
+                reply = chunk if reply is None else reply + chunk
+                for call in getattr(reply, 'tool_call_chunks', getattr(reply, 'tool_calls', [])):
+                    if call.get('name') != self.final_name:
+                        continue
+                    try:
+                        raw = call.get('args') or '{}'
+                        args = parse_partial_json(raw) if isinstance(raw, str) else raw
+                    except (ValueError, TypeError):
+                        continue
+                    text = args.get('response') if isinstance(args, dict) else None
+                    if isinstance(text, str) and text != previous:
+                        self.on_response(text)
+                        previous = text
+            if reply is None:
+                raise ValueError('Empty model stream')
+            delta = {'messages': [message_chunk_to_message(reply)], 'steps': state['steps'] + 1}
         # distinct turns must append even if a provider reuses its message id on a retry
         delta['messages'] = [m.model_copy(update={'id': str(uuid4())}) for m in delta['messages']]
         return delta

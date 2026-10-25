@@ -10,7 +10,7 @@ export function view(i, c) {
   if (c) return c;
   const plain = list => (list || []).map(x => ({ text: x.text, sources: x.sources || [] }));
   return { title: i.title, lead: i.why_it_matters[0]?.text || '', facts: plain(i.what_happened), why: plain(i.why_it_matters),
-           important_if: [], risks: plain(i.risks), opportunities: plain(i.opportunities), actions: i.actions,
+           important_if: (i.hypotheses || []).map(x => x.text), risks: plain(i.risks), opportunities: plain(i.opportunities), actions: i.actions,
            bank_view: plain(i.bank_view) };
 }
 
