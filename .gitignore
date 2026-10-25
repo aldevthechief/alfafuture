@@ -271,3 +271,6 @@ data/retrieval_v2/
 /data/api/*
 !/data/api/redis-warmup.rdb
 /data/feedback/
+
+# evaluation runs (judge outputs quote insights of real companies)
+data/evals/
