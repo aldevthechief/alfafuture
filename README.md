@@ -112,7 +112,10 @@ docker compose run --rm pipeline python -X utf8 scripts_seed_redis.py
 
 ## Материалы проекта
 
+- [Архитектура агентов](docs/ARCHITECTURE.md)
+- [Качество и безопасность агентской системы](docs/QUALITY_MONITORING_PROD.md)
 - [Вход в кабинеты и различия режимов](docs/CABINET_ENTRY.md).
 - [API и фоновые задачи](docs/API.md).
 - [Контракты пайплайна и интеграция](docs/MVP_REFERENCE.md).
 - [Гибридный поиск и факты из новостей](docs/HYBRID_NEWS_SEARCH.md).
+
