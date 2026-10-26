@@ -8,6 +8,19 @@
 .iw-btns{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:6px}
 
 .ip-filters{display:flex;flex-wrap:wrap;gap:8px;margin:16px 0}
+.ip-search-edge{height:1px;margin:20px 0 -1px;pointer-events:none}
+.ip-search{position:sticky;top:12px;z-index:10;margin:0 0 20px;padding:0 20px 14px;outline:1px solid transparent;transition:box-shadow .18s ease,outline-color .18s ease}
+.ip-search-pinned{outline-color:var(--line);box-shadow:0 12px 30px rgba(11,31,53,.16),0 3px 8px rgba(11,31,53,.05)}
+.ip-search-field{display:flex;gap:14px;align-items:center;padding:19px 0;border-bottom:1px solid var(--line);color:var(--text-3)}
+.ip-search-field svg{flex-shrink:0}.ip-search-field:focus-within{color:var(--blue);border-bottom-color:var(--blue)}
+.ip-search-field input{flex:1;min-width:0;width:100%;border:0;outline:0;background:transparent;color:var(--text);font-size:16px;line-height:1.6}
+.ip-search-field input::placeholder{color:var(--text-3)}
+.ip-search-tags{display:flex;gap:18px;align-items:baseline}.ip-search-tags>span{font-size:11px;color:var(--text-3)}
+.ip-search-tags .ip-filters{margin:14px 0 10px;gap:7px}
+.ip-search-status{display:flex;justify-content:space-between;gap:12px;align-items:center;font-size:11px;line-height:1.6;color:var(--text-3);padding-top:4px}
+.ip-search-status button{color:var(--blue);font-size:11px;text-align:right}
+@media(max-width:700px){.ip-search{top:8px;padding:0 15px 14px;max-height:52dvh;overflow-y:auto;overscroll-behavior:contain}.ip-search-field{gap:10px}.ip-search-field input{font-size:14px}.ip-search-tags{gap:10px}}
+@media(prefers-reduced-motion:reduce){.ip-search{transition:none}}
 .ic{display:flex;flex-direction:column;gap:8px;width:100%;text-align:left;padding:20px;margin-bottom:12px;transition:box-shadow .12s}
 .ic:hover{box-shadow:0 2px 12px rgba(11,31,53,.1)}
 .ic-tags{display:flex;flex-wrap:wrap;gap:6px;align-items:center}

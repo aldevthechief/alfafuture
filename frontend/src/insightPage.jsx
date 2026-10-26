@@ -7,6 +7,7 @@ import { Typography } from '@alfalab/core-components/typography';
 import { Input } from '@alfalab/core-components/input';
 import { CompactCard } from './insightCard.jsx';
 import { ALLOW_INFERENCE } from './cabinetMode.js';
+import { findInsights, insightTags, toggleInsightTag } from './cabinetToolsState.js';
 
 const valid = s => s && !isNaN(new Date(s));
 const date = s => valid(s) ? new Date(s).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' }) : '';
@@ -29,13 +30,24 @@ function LiveBar({ live, run }) {
   </div>;
 }
 
-export default memo(function Page({ company, feed, role, live, run, visible, hidden, answers, answer, profileState, onOpen, onRestore }) {
+export default memo(function Page({ company, feed, role, live, run, visible, hidden, answers, answer, profileState, onOpen, onRestore, searchRequest }) {
   const [tab, setTab] = useState('feed');
-  const [filter, setFilter] = useState('all');
+  const [filters, setFilters] = useState([]);
+  const [pinned, setPinned] = useState(false);
+  const searchEdge = useRef(null);
+  const [query, setQuery] = useState(searchRequest?.query || '');
   const [limit, setLimit] = useState(PAGE_SIZE);
-  useEffect(() => setLimit(PAGE_SIZE), [feed, filter]);
-  const channels = [...new Set(visible.map(i => i.channel))];
-  const shown = visible.filter(i => filter === 'all' || (filter === 'risks' ? (i.counts?.risks ?? i.risks?.length) : filter === 'opps' ? (i.counts?.opportunities ?? i.opportunities?.length) : i.channel === filter));
+  useEffect(() => setLimit(PAGE_SIZE), [feed, filters, query]);
+  useEffect(() => { if (searchRequest) {setQuery(searchRequest.query || '');setFilters([]);setTab('feed');} }, [searchRequest]);
+  useEffect(()=>{
+    setPinned(false);
+    if (tab!=='feed' || !searchEdge.current) return;
+    const observer=new IntersectionObserver(([entry])=>setPinned(!entry.isIntersecting && entry.boundingClientRect.top<12),{rootMargin:'-12px 0px 0px 0px',threshold:0});
+    observer.observe(searchEdge.current);
+    return ()=>observer.disconnect();
+  },[tab]);
+  const channels = [...new Set(visible.flatMap(insightTags))].filter(tag=>!['Риски','Возможности'].includes(tag));
+  const shown = findInsights(visible,query,filters);
   const questions = company ? company.profile.hypotheses.filter(h => !answers[h.id]).length : 0;
   return <div className="ip">
     <h1 className="h-sys">Инсайты</h1>
@@ -44,13 +56,22 @@ export default memo(function Page({ company, feed, role, live, run, visible, hid
     <Tabs selectedId={tab} onChange={(_, { selectedId }) => setTab(selectedId)} size="s">
       <Tab id="feed" title="События для вас">
         {tab === 'feed' && <>
-        <div className="ip-filters">
+        <div ref={searchEdge} className="ip-search-edge" aria-hidden="true"/>
+        <section className={`card ip-search${pinned ? ' ip-search-pinned' : ''}`} aria-label="Поиск и теги инсайтов">
+          <div className="ip-search-field"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="10" cy="10" r="6.5" stroke="currentColor" strokeWidth="2"/><path d="m15 15 6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/></svg>
+            <input type="search" aria-label="Поиск по словам и тегам в инсайтах" placeholder="Найти в инсайтах: слово, фраза или #тег" value={query} maxLength={160} onChange={event=>setQuery(event.target.value)}/>
+          </div>
+        <div className="ip-search-tags"><span>Теги</span><div className="ip-filters" role="group" aria-label="Теги инсайтов">
           {[['all', 'Все'], ['risks', 'Риски'], ['opps', 'Возможности'], ...channels.map(c => [c, c])].map(([id, t]) =>
-            <Tag key={id} size={32} checked={filter === id} onClick={() => setFilter(id)}>{t}</Tag>)}
-        </div>
+            <Tag key={id} size={32} checked={id==='all' ? !filters.length : filters.includes(id)} aria-pressed={id==='all' ? !filters.length : filters.includes(id)}
+              onClick={() => setFilters(previous=>toggleInsightTag(previous,id))}>{t}</Tag>)}
+        </div></div>
+        <div className="ip-search-status"><span role="status">{query.trim() || filters.length ? 'Найдено' : 'В ленте'} · {shown.length}{filters.length>0 && ` · тегов: ${filters.length}`}</span>
+          {(query || filters.length>0) && <button type="button" onClick={()=>{setQuery('');setFilters([]);}}>Сбросить поиск и теги</button>}</div>
+        </section>
         {shown.slice(0, limit).map(i => <CompactCard key={i.id} insight={i} onOpen={onOpen} />)}
         {shown.length > limit && <Button size={40} view="secondary" onClick={() => setLimit(n => n + PAGE_SIZE)}>Показать ещё</Button>}
-        {!shown.length && <p className="ip-empty">Сейчас нет событий, важных для вашей роли.</p>}
+        {!shown.length && <p className="ip-empty">{query.trim() || filters.length ? 'Ничего не найдено. Попробуйте другие слова или измените выбранные теги.' : 'Сейчас нет событий, важных для вашей роли.'}</p>}
         {hidden.length > 0 && <Button view="text" size={32} onClick={onRestore}>Показать скрытые ({hidden.length})</Button>}
         </>}
       </Tab>

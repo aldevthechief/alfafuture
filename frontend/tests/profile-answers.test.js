@@ -29,11 +29,17 @@ test('an answer is saved with its statement, a skip stays local, a withdrawn ans
 });
 
 test('profile reads use the backend projection and API errors are propagated instead of reporting a saved answer', async t => {
+  const controller=new AbortController();
   t.mock.method(globalThis, 'fetch', async (url, init) => {
     assert.equal(init.headers['X-User-ID'], USER_ID);
-    if (url.endsWith('/v1/companies/U_1')) return response({card:{},facts:[],profile:{industry:'Лизинг'}});
+    if (url.endsWith('/v1/companies/U_1')) {
+      assert.equal(init.signal,controller.signal);
+      return response({card:{},facts:[],profile:{industry:'Лизинг',overview:{company_id:'U_1'}}});
+    }
     return response({detail:'Service unavailable'},503);
   });
-  assert.equal((await companyProfile('U_1')).profile.industry,'Лизинг');
+  const result=await companyProfile('U_1',controller.signal);
+  assert.equal(result.profile.industry,'Лизинг');
+  assert.equal(result.profile.overview.company_id,'U_1');
   await assert.rejects(saveAnswer('U_1',question,{verdict:'yes'}), /Service unavailable/);
 });

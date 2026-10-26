@@ -43,7 +43,13 @@ export const startAnalysis = (company, role, options = {}) => {
 export const cabinetAccounts = () => call('/v1/cabinet/accounts');
 export const cabinetFeed = (company, role) => call(`/v1/cabinet/feed?company_id=${encodeURIComponent(company)}&role=${encodeURIComponent(role)}`);
 export const searchCompanies = query => call(`/v1/cabinet/companies?q=${encodeURIComponent(query)}`);
-export const companyProfile = company => call(`/v1/companies/${encodeURIComponent(company)}`).then(data => {
+export const paymentAnalytics = (company, { direction='out', q='', sort='amount', offset=0, limit=15 } = {}, signal) =>
+  call(`/v1/companies/${encodeURIComponent(company)}/payments?${new URLSearchParams({direction,q,sort,offset,limit})}`, {signal});
+export const companyCounterparties = (company, { direction='all', q='', group='all', sort='amount', offset=0, limit=15 } = {}, signal) =>
+  call(`/v1/companies/${encodeURIComponent(company)}/counterparties?${new URLSearchParams({direction,q,group,sort,offset,limit})}`, {signal});
+export const counterpartyDetails = (company, counterparty, signal) =>
+  call(`/v1/companies/${encodeURIComponent(company)}/counterparties/${encodeURIComponent(counterparty)}`, {signal});
+export const companyProfile = (company, signal) => call(`/v1/companies/${encodeURIComponent(company)}`, {signal}).then(data => {
   if (!data.profile) throw new Error('API вернул неполные данные профиля.');
   return data;
 });

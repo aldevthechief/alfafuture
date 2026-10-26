@@ -2,15 +2,13 @@
 // (compact feed, company profile with HITL questions) and the large insight window.
 // The entry chooses company/role; the feed merges saved and newly completed analyses for that reader.
 // API feed previews and individual detail requests keep unopened cards out of the initial render.
-import React, { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
+import React, { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { createPortal } from 'react-dom';
-import { Button } from '@alfalab/core-components/button';
-import { API_ENABLED, cabinetAccounts, cabinetFeed, startAnalysis } from './api';
+import { API_ENABLED, USER_ID, cabinetAccounts, cabinetFeed, startAnalysis } from './api';
 import './insights.css';
 import AccountChooser from './accountChooser.jsx';
 import { SESSION_KEY, validSession } from './cabinetMode.js';
-import { insightSignal } from './insightSignal.js';
 import { applyTheme } from './theme.js';
 import { ThemeToggle } from './themeToggle.jsx';
 import './theme.css';
@@ -18,6 +16,8 @@ import { compactKey, useCompactFeed } from './compactFeed.js';
 import { initialSession, sessionAccount } from './accountSession.js';
 import { CompanySwitcher } from './companySwitcher.jsx';
 import { useCompanyProfile } from './companyProfile.js';
+import { insightIdentity, notificationScope, readInsightViews, mergeInsightViews } from './cabinetToolsState.js';
+import './cabinetTools.css';
 
 let insightWindowModule;
 const prepareInsightWindow = () => insightWindowModule ??= import('./insightWindow.jsx')
@@ -25,6 +25,12 @@ const prepareInsightWindow = () => insightWindowModule ??= import('./insightWind
 const InsightWindow = lazy(prepareInsightWindow);
 const InsightPage = lazy(() => import('./insightPage.jsx'));
 const CompanyChat = lazy(() => import('./companyChat.jsx'));
+const PaymentAnalyticsPage = lazy(() => import('./paymentAnalytics.jsx'));
+const CounterpartiesPage = lazy(() => import('./counterparties.jsx'));
+const CompanyPage = lazy(() => import('./companyPage.jsx'));
+const CabinetTools = lazy(() => import('./cabinetTools.jsx'));
+const DocumentsPage = lazy(() => import('./documents.jsx'));
+const HomeDashboard = lazy(() => import('./homeDashboard.jsx'));
 
 function useView() {
   const [view, setView] = useState(() => document.querySelector('.view.active')?.id.replace('view-', '') || 'home');
@@ -87,6 +93,29 @@ function App() {
   const [open, setOpen] = useState(null);
   const [hidden, setHidden] = useState([]);
   const [answers, setAnswers] = useState({}); // company id → hypothesis id → {verdict, text}
+  const [tool,setTool] = useState(null);
+  const [counterpartySearch,setCounterpartySearch] = useState(null);
+  const [insightSearch,setInsightSearch] = useState(null);
+  const [paymentSearch,setPaymentSearch] = useState(null);
+  const [companySearch,setCompanySearch] = useState(null);
+  const notificationKey=notificationScope(USER_ID,ctx.company,ctx.role);
+  const [seenInsights,setSeenInsights] = useState(()=>readInsightViews(notificationKey));
+  useEffect(()=>{
+    try {localStorage.setItem(notificationKey,JSON.stringify(seenInsights));} catch {}
+  },[notificationKey,seenInsights]);
+  useEffect(()=>{
+    const openTool=event=>{if (['search','notifications'].includes(event.detail?.tool)) setTool(event.detail.tool);};
+    window.addEventListener('cabinet:tool',openTool);
+    return ()=>window.removeEventListener('cabinet:tool',openTool);
+  },[]);
+  useEffect(()=>{
+    document.getElementById('cabinetSearch')?.setAttribute('aria-expanded',String(tool==='search'));
+    document.getElementById('cabinetNotifications')?.setAttribute('aria-expanded',String(tool==='notifications'));
+    return ()=>{
+      document.getElementById('cabinetSearch')?.setAttribute('aria-expanded','false');
+      document.getElementById('cabinetNotifications')?.setAttribute('aria-expanded','false');
+    };
+  },[tool]);
   const [bankChat, setBankChat] = useState({ mounted:false, open:false });
   useEffect(() => {
     const toggle = () => setBankChat(value => ({ mounted:true, open:!value.open }));
@@ -116,6 +145,20 @@ function App() {
   // API insights carry the role id
   const visible = useMemo(() => (feed?.insights || []).filter(i => !hidden.includes(i.id))
     .map(i => ({ ...i, compact: compactVersions[compactKey(i)], roleLabel: i.role === ctx.role ? role : data?.roles.find(r => r.id === i.role)?.name || i.role })), [feed, hidden, data, ctx.role, role, compactVersions]);
+  const unread=visible.filter(insight=>!seenInsights.includes(insightIdentity(insight)));
+  const openInsight=useCallback(insight=>{
+    setSeenInsights(previous=>mergeInsightViews(previous,[insight]));
+    setTool(null);setOpen(insight);
+  },[]);
+  const navigateSearch=useCallback((view,request={})=>{
+    setTool(null);
+    if (view==='chat') {setBankChat({mounted:true,open:true});return;}
+    if (view==='counterparties') setCounterpartySearch({query:request.query || ''});
+    if (view==='payments') setPaymentSearch({query:request.query || '',direction:request.direction || 'out'});
+    if (view==='company') setCompanySearch({target:request.target});
+    if (view==='insights') setInsightSearch({query:request.query || ''});
+    window.showView(view);
+  },[]);
   const hide = useCallback(id => { setHidden(h => [...h, id]); setOpen(null); }, []);
   const close = useCallback(() => setOpen(null), []);
   const restore = useCallback(() => setHidden([]), []);
@@ -128,14 +171,37 @@ function App() {
   const slot = id => document.getElementById(id);
 
   return <>
+    {createPortal(unread.length ? <span className="cabinet-notification-count" aria-label={`Новых инсайтов: ${unread.length}`}>{unread.length>99 ? '99+' : unread.length}</span> : null,slot('notifications-badge'))}
+    {tool && <Suspense fallback={<div className="insight-opening" role="status">Открываем…</div>}>
+      <CabinetTools key={tool} tool={tool} company={ctx.company} companyName={ctx.company_meta?.name || company?.profile.name}
+        insights={visible} unread={unread} seen={seenInsights} loading={live.state==='loading'} error={live.error}
+        onClose={()=>setTool(null)} onOpen={openInsight} onNavigate={navigateSearch}
+        onReadAll={()=>setSeenInsights(previous=>mergeInsightViews(previous,visible))}/>
+    </Suspense>}
+    {view === 'documents' && createPortal(<Suspense fallback={<p role="status">Загружаем документы…</p>}>
+      <DocumentsPage key={ctx.company} name={ctx.company_meta?.name || company?.profile.name} />
+    </Suspense>,slot('documents-page'))}
+    {view === 'company' && createPortal(<Suspense fallback={<p role="status">Загружаем компанию…</p>}>
+      <CompanyPage key={ctx.company} company={ctx.company} name={ctx.company_meta?.name || company?.profile.name} searchRequest={companySearch} />
+    </Suspense>,slot('company-page'))}
+    {view === 'counterparties' && createPortal(<Suspense fallback={<p role="status">Загружаем контрагентов…</p>}>
+      <CounterpartiesPage key={ctx.company} company={ctx.company} name={ctx.company_meta?.name || company?.profile.name} searchRequest={counterpartySearch} />
+    </Suspense>,slot('counterparties-page'))}
+    {view === 'payments' && createPortal(<Suspense fallback={<p role="status">Загружаем платёжную аналитику…</p>}>
+      <PaymentAnalyticsPage key={ctx.company} company={ctx.company} name={ctx.company_meta?.name || company?.profile.name} searchRequest={paymentSearch} />
+    </Suspense>,slot('payments-page'))}
     {bankChat.mounted && <Suspense fallback={<div role="status" className="insight-opening">Открываем чат…</div>}>
       <CompanyChat company={ctx.company} role={ctx.role} name={ctx.company_meta?.name || company?.profile.name}
         roleTitle={role} open={bankChat.open} onClose={() => setBankChat(value => ({ ...value,open:false }))} />
     </Suspense>}
-    {createPortal(<HomeWidget insights={visible} state={live.state} error={live.error} onOpen={setOpen} />, slot('insights-widget'))}
+    {view==='home' && createPortal(<Suspense fallback={<p role="status">Загружаем обзор компании…</p>}>
+      <HomeDashboard company={ctx.company} name={ctx.company_meta?.name || company?.profile.name} role={role}
+        insights={visible} unreadCount={unread.length} feedDate={feed?.computed_at} feedState={live.state} feedError={live.error}
+        onOpen={openInsight} onNavigate={navigateSearch} onNotifications={()=>setTool('notifications')}/>
+    </Suspense>,slot('home-page'))}
     {view === 'insights' && createPortal(<Suspense fallback={<p role="status">Загружаем ленту…</p>}>
-      <InsightPage {...{ company, feed, role, live, run, visible, hidden, profileState:ctx.company_meta ? profileState : undefined,
-        answers:ctx.company_meta ? profileState.answers : answers[ctx.company] || EMPTY_ANSWERS, answer, onOpen: setOpen, onRestore: restore }} />
+      <InsightPage {...{ company, feed, role, live, run, visible, hidden, searchRequest:insightSearch, profileState:ctx.company_meta ? profileState : undefined,
+        answers:ctx.company_meta ? profileState.answers : answers[ctx.company] || EMPTY_ANSWERS, answer, onOpen: openInsight, onRestore: restore }} />
     </Suspense>, slot('insights-page'))}
     {open && <Suspense fallback={<div className="insight-opening" role="status">Открываем инсайт…</div>}>
       <InsightWindow key={`${ctx.company}:${ctx.role}:${open.job_id || 'demo'}:${open.id}`}
@@ -143,25 +209,6 @@ function App() {
     </Suspense>}
   </>;
 }
-
-// home: one line with the top-1 insight, like the payment-statuses row next to it (criterion 08)
-const HomeWidget = memo(function HomeWidget({ insights, state, error, onOpen }) {
-  const top = insights[0];
-  const signal = top && insightSignal(top);
-  const title = top?.compact?.title || top?.title;
-  return <div className={`card iw${signal ? ` insight-tone-${signal.tone}` : ''}`}>
-    <b className="iw-label">Инсайты</b>
-    {top
-      ? <button className="iw-top" onClick={() => onOpen(top)} title={`${signal.label}. ${signal.reason}${signal.high ? ' Высокое влияние.' : ''} ${title}`}>
-        <span role="img" aria-label={signal.label}>{signal.emoji}</span>{' '}
-        {signal.high && <><span role="img" aria-label="Высокое влияние">🔥</span>{' '}</>}{title}
-      </button>
-      : <span className="iw-top iw-none" role="status">{state === 'running' ? 'Готовим персональные инсайты…'
-        : state === 'loading' ? 'Загружаем инсайты…' : error || 'Сейчас нет важных для вас событий'}</span>}
-    <Button size={32} view="secondary" onClick={() => window.showView('insights')}>
-      Больше инсайтов{insights.length > 1 ? ` · ${insights.length}` : ''}</Button>
-  </div>;
-});
 
 function readSession() {
   try { const session = JSON.parse(sessionStorage.getItem(SESSION_KEY)); return validSession(session) ? session : null; }

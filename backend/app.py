@@ -5,6 +5,7 @@ import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated
+from typing import Literal
 
 import pymupdf
 from fastapi import FastAPI, File, Form, Header, HTTPException, Query, UploadFile
@@ -18,11 +19,13 @@ from backend.cabinet import cached_job, cabinet_feed, catalog as cabinet_catalog
 from backend.insight_previews import detail, metadata, preview_feed
 from backend.schemas import AnalysisRequest, AskRequest, BatchRequest, PreparationRequest, SearchRequest, JobResponse
 from backend.service import Service
+from backend.payments import PaymentAnalytics
 from common.roles import roles
 from stage5_insight_detection.bank_analytics.prepare import PreparationOptions
 from stage5_insight_detection.bank_analytics.ocr import PDF_DIR
 
-def create_app(service=None, cors_origins=None):
+def create_app(service=None, cors_origins=None, payment_analytics=None):
+    payment_reports = payment_analytics if payment_analytics is not None else PaymentAnalytics()
     @asynccontextmanager
     async def lifespan(app):
         app.state.service=service or Service(checkpointing=True, agent_workers=1, auto_compact=True)
@@ -243,6 +246,39 @@ def create_app(service=None, cors_origins=None):
             result = company_inputs(profile)
             return jsonable_encoder(dict(card=result.card, facts=result.facts, profile=display_profile(profile)))
         except (KeyError,ValueError,FileNotFoundError) as exc: raise HTTPException(404,'Company not found') from exc
+
+    def payment_result(method, company_id, *args, **kwargs):
+        import re
+        if not re.fullmatch(r'[A-Za-z0-9_-]{1,100}',company_id):
+            raise HTTPException(422,'Invalid company_id')
+        try:
+            return method(company_id,*args,**kwargs)
+        except KeyError as exc:
+            raise HTTPException(404,'Компания или платёжная связь не найдена') from exc
+        except (FileNotFoundError, OSError) as exc:
+            raise HTTPException(503,'Платёжные данные не установлены на сервере') from exc
+        except ValueError as exc:
+            raise HTTPException(503,'Не удалось рассчитать аналитику: проверьте платёжные данные') from exc
+
+    @app.get('/v1/companies/{company_id}/counterparties',tags=['companies'])
+    def counterparties(company_id: str, x_user_id: User = None, direction: Literal['all','in','out','both'] = 'all',
+                       q: str = Query('',max_length=120), group: Literal['all','own'] = 'all',
+                       sort: Literal['amount','in','out','count','name'] = 'amount',
+                       offset: int = Query(0,ge=0), limit: int = Query(15,ge=1,le=100)):
+        return payment_result(payment_reports.counterparties,company_id,direction,q,group,sort,offset,limit)
+
+    @app.get('/v1/companies/{company_id}/counterparties/{counterparty_id}',tags=['companies'])
+    def counterparty(company_id: str, counterparty_id: str, x_user_id: User = None):
+        import re
+        if not re.fullmatch(r'[A-Za-z0-9_-]{1,100}',counterparty_id):
+            raise HTTPException(422,'Invalid counterparty_id')
+        return payment_result(payment_reports.counterparty,company_id,counterparty_id)
+
+    @app.get('/v1/companies/{company_id}/payments',tags=['companies'])
+    def company_payments(company_id: str, x_user_id: User = None, direction: Literal['in','out'] = 'out',
+                         q: str = Query('',max_length=120), sort: Literal['amount','count'] = 'amount',
+                         offset: int = Query(0,ge=0), limit: int = Query(15,ge=1,le=100)):
+        return payment_result(payment_reports.report,company_id,direction,q,sort,offset,limit)
     return app
 
 app=create_app()

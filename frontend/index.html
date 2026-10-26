@@ -16,7 +16,7 @@ try {
 <!--
   Recreation of the current Alfa-Business web cabinet (2024 light redesign).
   Source: habr.com/ru/companies/alfa/articles/809991, screenshots in reference/.
-  Home + our service (src/main.jsx on @alfalab/core-components, data public/feed.json); other sections are stubs.
+  Company overview and analytical sections are rendered by src/main.jsx using the existing cabinet APIs.
   Run: npm ci && npm run dev   (static build: npm run build -> dist/)
 -->
 <style>
@@ -101,78 +101,13 @@ body.cabinet-locked .app,body.cabinet-locked>.fab,body.cabinet-locked>.chat{disp
 .h-sys{font-size:40px;line-height:48px;font-weight:700;letter-spacing:-.6px;margin:8px 0 6px}
 .h-sub{color:var(--text-2);margin-bottom:20px}
 
-/* ---------- home ---------- */
-.quick{display:grid;grid-template-columns:repeat(5,minmax(0,1fr)) 56px;gap:16px;margin-bottom:16px}
-.qtile{min-height:120px;padding:14px;display:flex;flex-direction:column;justify-content:space-between;text-align:left;font-size:15px;line-height:1.3}
-.qtile:hover{box-shadow:0 2px 12px rgba(11,31,53,.08)}
-.qico{width:40px;height:40px;border-radius:12px;background:var(--bg);display:grid;place-items:center;color:var(--icon)}
-.qside{display:flex;flex-direction:column;gap:12px}
-.qside button{flex:1;border:1.5px dashed #9AA3AE;border-radius:14px;display:grid;place-items:center;color:#6B7785}
-.qside button.more{border-color:#7FB0FF;color:var(--blue)}
-.statuses{display:flex;align-items:center;gap:30px;padding:0 24px;height:60px;margin-bottom:16px;overflow-x:auto;white-space:nowrap}
-.statuses button{display:flex;align-items:center;gap:10px;font-size:15.5px}
-.statuses button:last-child{margin-left:auto}
-.cnt{min-width:26px;height:26px;padding:0 7px;border-radius:13px;background:var(--fill);font-size:14px;font-weight:600;display:grid;place-items:center}
-.cnt.red{background:var(--red);color:#fff}
-
-.home-grid{display:grid;grid-template-columns:minmax(0,1fr) 276px;gap:24px;margin-bottom:24px}
-.acc{padding:24px 26px;display:grid;grid-template-columns:auto minmax(0,1fr);gap:0 32px;align-items:start}
-.acc-col{display:flex;flex-direction:column;gap:6px;min-width:0}
-.acc-col + .acc-col{border-left:1.5px dashed var(--line);padding-left:32px}
-.acc-label{display:flex;align-items:center;gap:8px;color:var(--text)}
-.acc-label svg{color:var(--text-3)}
-.amount{font-size:34px;line-height:42px;font-weight:700;letter-spacing:-.6px;white-space:nowrap}
-.amount .kop{color:#A9B1BA}
-.acc-no{display:flex;align-items:center;gap:8px;color:var(--text)}
-.acc-no button{color:var(--text-3)}
-.tag{display:inline-block;align-self:flex-start;font-size:11.5px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;padding:4px 8px;border-radius:6px;background:var(--green-bg);color:var(--green)}
-.amount-plus{display:flex;align-items:center;gap:10px}
-.amount-plus i{width:24px;height:24px;flex:0 0 24px;border-radius:50%;background:var(--green);color:#fff;display:grid;place-items:center;font-style:normal;font-weight:700;font-size:18px;line-height:1}
-.dep-line{color:var(--text-2);margin-top:14px}
-.dep-line b{color:var(--text);font-weight:600}
-.chip{align-self:flex-start;margin-top:12px;display:inline-flex;align-items:center;gap:8px;background:var(--bg);border-radius:10px;padding:8px 12px;font-size:14.5px}
-.chip b{font-weight:600}
-.acc-actions{grid-column:1/-1;display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:22px;flex-wrap:wrap}
+/* ---------- shared buttons ---------- */
 .btn{height:44px;padding:0 22px;border-radius:12px;font-weight:500;display:inline-flex;align-items:center;justify-content:center;gap:8px;white-space:nowrap}
 .btn-gray{background:var(--fill)}
 .btn-gray:hover{background:var(--fill-hover)}
 .btn-red{background:var(--red);color:#fff}
 .btn-red:hover{background:var(--red-dark)}
 .btn-text{padding:0 8px}
-
-.right{display:flex;flex-direction:column;gap:12px}
-.promo{border-radius:14px;padding:14px 16px;min-height:138px;position:relative;overflow:hidden;text-align:left;display:flex;flex-direction:column;justify-content:space-between;gap:10px}
-.promo b{font-size:14.5px}
-.promo p{font-size:13.5px;line-height:1.3;max-width:180px}
-.promo .art{position:absolute;right:-8px;top:24px;width:70px;height:80px;border-radius:12px;transform:rotate(-8deg)}
-.promo:hover{box-shadow:0 2px 12px rgba(11,31,53,.12)}
-.promo-card{background:#A9D3F2}
-.promo-card .art{background:linear-gradient(135deg,#FF5A47,#D42A1E)}
-.promo-bonus{background:#F2C8B3}
-.promo-bonus .art{background:linear-gradient(135deg,#9B7BFF,#2BB3C7);border-radius:50%}
-
-.hist{padding:22px 26px 26px}
-.hist-head{display:flex;justify-content:space-between;align-items:center;padding-bottom:18px;border-bottom:1px solid var(--line);margin:0 -10px 20px;padding-left:10px;padding-right:10px}
-.hist-head h2{font-size:19px;font-weight:700}
-.filters{display:grid;grid-template-columns:370px minmax(0,1fr);gap:16px;margin-bottom:16px}
-.field{height:52px;border-radius:12px;background:var(--bg);display:flex;align-items:center;gap:12px;padding:0 14px;color:var(--text-2)}
-.field input{flex:1;min-width:0;border:0;background:none;outline:none;font-size:16px;color:var(--text)}
-.field .date{flex:1;text-align:center;color:var(--text);font-size:16px}
-.chips{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:18px}
-.fchip{height:36px;padding:0 14px;border-radius:10px;background:var(--bg);display:inline-flex;align-items:center;gap:6px}
-.fchip.on{background:var(--text);color:#fff}
-.chips .push{margin-left:auto}
-.sums{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px;margin-bottom:12px}
-.sum{background:var(--bg);border-radius:12px;padding:14px 16px}
-.sum > span{display:flex;align-items:center;gap:6px;font-size:13.5px;color:var(--text-2);margin-bottom:6px}
-.sum b{font-size:16px;font-weight:600;white-space:nowrap}
-.ops{width:100%;border-collapse:collapse}
-.ops td{padding:13px 8px;border-top:1px solid var(--line);vertical-align:middle}
-.ops td:first-child{padding-left:0;color:var(--text-2);width:90px}
-.ops td:last-child{text-align:right;padding-right:0;font-weight:600;white-space:nowrap}
-.ops .cp{font-weight:500}
-.ops .purpose{font-size:13.5px;color:var(--text-2);display:block}
-.ops .in{color:var(--green)}
 
 /* ---------- service page ---------- */
 .mount{min-height:420px;padding:24px;border-radius:var(--radius);background:var(--card)}
@@ -227,17 +162,6 @@ body.cabinet-locked .app,body.cabinet-locked>.fab,body.cabinet-locked>.chat{disp
 .side-overlay{display:none}
 
 /* ---------- responsive ---------- */
-@media (max-width:1280px){
-  .quick{grid-template-columns:repeat(3,minmax(0,1fr))}
-  .quick .qtile:nth-child(n+4),.qside{display:none}
-}
-@media (max-width:1100px){
-  .home-grid{grid-template-columns:1fr}
-  .right{flex-direction:row;flex-wrap:wrap}
-  .right > *{flex:1 1 260px}
-  .filters{grid-template-columns:1fr}
-  .sums{grid-template-columns:repeat(2,minmax(0,1fr))}
-}
 @media (max-width:900px){
   .side{position:fixed;left:0;transform:translateX(-102%);transition:transform .25s;box-shadow:0 0 40px rgba(0,0,0,.2)}
   body.side-open .side{transform:none}
@@ -246,16 +170,9 @@ body.cabinet-locked .app,body.cabinet-locked>.fab,body.cabinet-locked>.chat{disp
   .top{padding:0 16px}
   .content{padding:8px 16px 96px}
   .top-hide,.top-sep{display:none}
-  .acc{grid-template-columns:1fr}
-  .acc-col + .acc-col{border-left:0;padding-left:0;border-top:1.5px dashed var(--line);padding-top:16px;margin-top:16px}
 }
 @media (max-width:600px){
-  .quick{grid-template-columns:repeat(2,minmax(0,1fr))}
-  .quick .qtile:nth-child(3){display:none}
   .who-btn span{display:none}
-  .amount{font-size:28px}
-  .sums{grid-template-columns:1fr}
-  .ops td:nth-child(1){display:none}
   .h-sys{font-size:30px;line-height:36px}
 }
 </style>
@@ -273,29 +190,14 @@ body.cabinet-locked .app,body.cabinet-locked>.fab,body.cabinet-locked>.chat{disp
       Альфа-Бизнес
     </a>
     <nav class="nav" id="nav">
-      <button class="nav-item primary" data-view="stub" data-title="Новый платёж"><svg width="22" height="22" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="currentColor"/><path d="M12 7.5v9M7.5 12h9" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/></svg>Новый платёж</button>
-      <button class="nav-item" data-view="stub" data-title="Платежи в работе"><svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M17 3l4 4-4 4V8.5H6V5.5h11zM7 21l-4-4 4-4v2.5h11v3H7z"/></svg>Платежи в работе</button>
-      <button class="nav-item" data-view="stub" data-title="Импорт платежей"><svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M7 2h8l5 5v15H7zM4 6h2v15h11v2H4z"/><path d="M10 13h7v2h-7zm0 3.5h5v2h-5z" fill="#fff"/></svg>Импорт платежей</button>
-      <button class="nav-item" data-view="stub" data-title="Выписка"><svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M5 2h9l5 5v15H5z"/><circle cx="12" cy="15" r="2.2" fill="#fff"/></svg>Выписка</button>
-      <button class="nav-item" data-view="stub" data-title="Счета"><svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><rect x="3" y="3" width="18" height="18" rx="5"/><path d="M7.5 8.5h9v2h-9zm0 4h9v2h-9z" fill="#fff"/></svg>Счета</button>
-      <button class="nav-item" data-view="stub" data-title="Контрагенты"><svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="7" r="3.3"/><circle cx="17" cy="8.5" r="2.6"/><path d="M2.5 20c0-4 3-6.5 6.5-6.5s6.5 2.5 6.5 6.5zM16.5 20c0-2.2-.6-4-1.7-5.3.7-.3 1.4-.4 2.2-.4 2.9 0 4.5 2 4.5 5.7z"/></svg>Контрагенты</button>
-
-      <div class="nav-caption">Мои сервисы <button aria-label="Добавить сервис"><svg width="16" height="16" viewBox="0 0 24 24"><path d="M12 4v16M4 12h16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button></div>
+      <button class="nav-item" data-view="home"><svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 3 2 11.2h3V21h5.2v-6h3.6V21H19v-9.8h3z"/></svg>Главная</button>
       <button class="nav-item" data-view="insights"><svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M4 3h12l4 4v14H4z"/><path d="M7.5 9h9v2h-9zm0 3.5h9v2h-9zm0 3.5h5.5v2H7.5z" fill="#fff"/></svg>Инсайты<span class="nav-badge">НОВОЕ</span></button>
-      <button class="nav-item" data-view="stub" data-title="Кредитные продукты"><svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><circle cx="7" cy="7" r="3"/><circle cx="17" cy="17" r="3"/><path d="M17.6 4.4l2 2L6.4 19.6l-2-2z"/></svg>Кредитные продукты</button>
-      <button class="nav-item" data-view="stub" data-title="Депозиты"><svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><rect x="2" y="5" width="20" height="14" rx="3"/><circle cx="12" cy="12" r="3" fill="#fff"/></svg>Депозиты<span class="nav-badge">НОВОЕ</span></button>
-      <button class="nav-item" data-view="stub" data-title="ВЭД"><svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm6.9 9h-3a15 15 0 0 0-1.4-6.2A8 8 0 0 1 18.9 11zM12 4.2c.9 1.3 1.7 3.8 1.9 6.8h-3.8c.2-3 1-5.5 1.9-6.8zM9.5 4.8A15 15 0 0 0 8.1 11h-3a8 8 0 0 1 4.4-6.2zM5.1 13h3a15 15 0 0 0 1.4 6.2A8 8 0 0 1 5.1 13zm6.9 6.8c-.9-1.3-1.7-3.8-1.9-6.8h3.8c-.2 3-1 5.5-1.9 6.8zm2.5-.6a15 15 0 0 0 1.4-6.2h3a8 8 0 0 1-4.4 6.2z"/></svg>ВЭД</button>
-      <button class="nav-item" data-view="stub" data-title="Зарплатный проект"><svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M3 7a3 3 0 0 1 3-3h11v3H3zm0 2h18v9a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3z"/><circle cx="16.5" cy="14" r="1.6" fill="#fff"/></svg>Зарплатный проект</button>
-      <button class="nav-item" data-view="stub" data-title="Документооборот"><svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M5 2h9l5 5v6.5h-5V19H5z"/><path d="M15 15h3.5v-2l3.5 3.5-3.5 3.5v-2H15z"/></svg>Документооборот</button>
-      <div class="nav-sep"></div>
-      <button class="nav-item nav-promo" data-view="stub" data-title="Управление ликвидностью"><svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M12 3s6 6.4 6 11a6 6 0 0 1-12 0c0-4.6 6-11 6-11z"/></svg>Управление ликвидностью</button>
-      <button class="nav-item nav-promo" data-view="stub" data-title="Госзакупки"><svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2 3 6.5V8h18V6.5zM5 10h2.5v7H5zm5.75 0h2.5v7h-2.5zM16.5 10H19v7h-2.5zM3 19h18v2.5H3z"/></svg>Госзакупки</button>
+      <button class="nav-item" data-view="company"><svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M4 3h11v5h5v13H4zm3 3v3h2V6zm4 0v3h2V6zm-4 6v3h2v-3zm4 0v3h2v-3zm5-1v3h2v-3zm0 6v2h2v-2zm-9 1v3h6v-3z"/></svg>Компания</button>
+      <button class="nav-item" data-view="payments"><svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M17 3l4 4-4 4V8.5H6V5.5h11zM7 21l-4-4 4-4v2.5h11v3H7z"/></svg>Платёжная аналитика</button>
+      <button class="nav-item" data-view="counterparties"><svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="7" r="3.3"/><circle cx="17" cy="8.5" r="2.6"/><path d="M2.5 20c0-4 3-6.5 6.5-6.5s6.5 2.5 6.5 6.5zM16.5 20c0-2.2-.6-4-1.7-5.3.7-.3 1.4-.4 2.2-.4 2.9 0 4.5 2 4.5 5.7z"/></svg>Контрагенты</button>
+
+      <button class="nav-item" data-view="documents"><svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M5 2h9l5 5v6.5h-5V19H5z"/><path d="M15 15h3.5v-2l3.5 3.5-3.5 3.5v-2H15z"/></svg>Документооборот</button>
     </nav>
-    <div class="side-tiles">
-      <button class="side-tile" data-view="stub" data-title="Все сервисы и продукты"><svg width="22" height="22" viewBox="0 0 24 24" fill="var(--blue)"><path d="M2 3h3.2l.7 3H21l-2.2 8H7.6l.5 2H19v2.5H6.2L3.3 5.5H2z"/><circle cx="8.5" cy="20.8" r="1.6"/><circle cx="17" cy="20.8" r="1.6"/></svg>Все сервисы и&nbsp;продукты</button>
-      <button class="side-tile" data-view="stub" data-title="Кэшбэк и привилегии"><svg width="22" height="22" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="var(--purple)"/><path d="M12 6.5 8.3 15.5h2l.7-1.8h2l.7 1.8h2zm-.5 5.6.5-1.5.5 1.5z" fill="#fff"/></svg>Кэшбэк и&nbsp;привилегии</button>
-    </div>
-    <button class="side-old" data-view="stub" data-title="Предыдущая версия">Предыдущая версия</button>
   </aside>
   <div class="side-overlay" id="sideOverlay"></div>
 
@@ -304,11 +206,10 @@ body.cabinet-locked .app,body.cabinet-locked>.fab,body.cabinet-locked>.chat{disp
     <header class="top">
       <span id="theme-toggle"></span>
       <button class="top-btn burger" id="burger" aria-label="Меню"><svg width="22" height="22" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
-      <button class="top-btn top-hide" data-view="stub" data-title="Поиск"><svg width="20" height="20" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5" fill="none" stroke="currentColor" stroke-width="2.4"/><path d="m15.5 15.5 5 5" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/></svg>Поиск</button>
+      <button class="top-btn" id="cabinetSearch" data-cabinet-tool="search" aria-label="Поиск" aria-haspopup="dialog" aria-expanded="false" aria-controls="cabinet-tool-panel"><svg width="20" height="20" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5" fill="none" stroke="currentColor" stroke-width="2.4"/><path d="m15.5 15.5 5 5" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/></svg><span class="cabinet-search-label">Поиск</span></button>
       <span class="top-sep"></span>
       <button class="top-btn top-hide" aria-label="Календарь" data-view="calendar" data-title="Календарь"><svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M7 2h2v2h6V2h2v2h1a3 3 0 0 1 3 3v12a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3V7a3 3 0 0 1 3-3h1z"/><path d="M5 9h14v2H5z" fill="#fff"/><path d="M7 13h2v2H7zm4 0h2v2h-2zm4 0h2v2h-2zm-8 3.5h2v2H7zm4 0h2v2h-2z" fill="#fff"/></svg></button>
-      <button class="top-btn top-hide" aria-label="Письма" data-view="stub" data-title="Письма"><svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M2 6.5A2.5 2.5 0 0 1 4.5 4h15A2.5 2.5 0 0 1 22 6.5v.3l-10 6-10-6z"/><path d="M2 9.2l10 6 10-6v8.3a2.5 2.5 0 0 1-2.5 2.5h-15A2.5 2.5 0 0 1 2 17.5z"/></svg></button>
-      <button class="top-btn" aria-label="Уведомления" data-view="stub" data-title="Уведомления"><svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2.5a6.5 6.5 0 0 0-6.5 6.5v4.2L3.6 16.6c-.4.7.1 1.4.9 1.4h15c.8 0 1.3-.7.9-1.4l-1.9-3.4V9A6.5 6.5 0 0 0 12 2.5zM9.4 19.5a2.7 2.7 0 0 0 5.2 0z"/></svg></button>
+      <button class="top-btn cabinet-notifications" id="cabinetNotifications" aria-label="Уведомления" data-cabinet-tool="notifications" aria-haspopup="dialog" aria-expanded="false" aria-controls="cabinet-tool-panel"><svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2.5a6.5 6.5 0 0 0-6.5 6.5v4.2L3.6 16.6c-.4.7.1 1.4.9 1.4h15c.8 0 1.3-.7.9-1.4l-1.9-3.4V9A6.5 6.5 0 0 0 12 2.5zM9.4 19.5a2.7 2.7 0 0 0 5.2 0z"/></svg><span id="notifications-badge"></span></button>
       <span class="top-sep"></span>
       <div class="who">
         <button class="who-btn" id="whoBtn" title="Выбрать компанию и должность" aria-haspopup="menu" aria-expanded="false" aria-controls="company-switcher">
@@ -324,75 +225,15 @@ body.cabinet-locked .app,body.cabinet-locked>.fab,body.cabinet-locked>.chat{disp
     <main class="content">
 
       <!-- ===== HOME ===== -->
-      <section class="view active" id="view-home">
-        <div class="quick" id="quick"></div>
-
-        <div class="card statuses" id="statuses"></div>
-        <div id="insights-widget"></div>
-
-        <div class="home-grid">
-          <div class="card acc">
-            <div class="acc-col">
-              <div class="acc-label">Рублёвый счёт <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M15.5 4 20 8.5 9 19.5H4.5V15z"/></svg></div>
-              <div class="amount num" id="accAmount"></div>
-              <div class="acc-no num"><span id="accNo"></span><button aria-label="Скопировать номер счёта" id="copyNo"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8 3h11v13h-3V6H8z"/><path d="M4 8h11v13H4z"/></svg></button></div>
-              <span class="chip num">Свои деньги:&nbsp;<b id="ownMoney"></b></span>
-            </div>
-            <div class="acc-col">
-              <span class="tag">Кредитная линия</span>
-              <div class="amount num amount-plus"><i>+</i><span id="creditAmount"></span></div>
-              <div id="creditNote" style="color:var(--text)"></div>
-              <div class="dep-line num" id="depLine"></div>
-            </div>
-            <div class="acc-actions">
-              <button class="btn btn-gray" id="copyReq">Скопировать реквизиты</button>
-              <span>Обслуживание «Корпоративный»</span>
-            </div>
-          </div>
-
-          <div class="right">
-            <button class="promo promo-card" data-view="stub" data-title="Карты">
-              <b>Закажите карту</b>
-              <p>До 5% кэшбэк. Карта будет доступна уже через 60&nbsp;секунд</p>
-              <span class="art"></span>
-            </button>
-            <button class="promo promo-bonus" data-view="stub" data-title="Кэшбэк и привилегии">
-              <b>Деньги сверху</b>
-              <p>Получайте бонусные баллы за привычные операции</p>
-              <span class="art"></span>
-            </button>
-          </div>
-        </div>
-
-        <div class="card hist">
-          <div class="hist-head"><h2>История операций</h2><svg width="18" height="18" viewBox="0 0 24 24"><path d="m6 15 6-6 6 6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
-          <div class="filters">
-            <div class="field"><svg width="18" height="18" viewBox="0 0 24 24"><path d="m15 5-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg><span class="date">Сегодня</span><svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M7 2h2v2h6V2h2v2h1a3 3 0 0 1 3 3v12a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3V7a3 3 0 0 1 3-3h1zM5 9v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9z"/></svg></div>
-            <label class="field"><input id="opsSearch" placeholder="Название контрагента, ИНН или КПП" aria-label="Поиск по операциям"><svg width="20" height="20" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="m15.5 15.5 5 5" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg></label>
-          </div>
-          <div class="chips">
-            <button class="fchip" data-dir="all" aria-pressed="true">Все</button>
-            <button class="fchip" data-dir="in" aria-pressed="false">Входящие</button>
-            <button class="fchip" data-dir="out" aria-pressed="false">Исходящие</button>
-            <button class="fchip">Тип платежа ▾</button>
-            <button class="fchip">Сумма ▾</button>
-            <button class="btn btn-text push">Скачать ОСВ</button>
-            <button class="btn btn-red">Скачать выписку</button>
-          </div>
-          <div class="sums num" id="sums"></div>
-          <table class="ops num"><tbody id="ops"></tbody></table>
-        </div>
-      </section>
+      <section class="view active" id="view-home"><div id="home-page"></div></section>
 
       <!-- ===== OUR SERVICE (rendered by src/main.jsx) ===== -->
       <section class="view" id="view-insights"><div id="insights-page"></div></section>
+      <section class="view" id="view-payments"><div id="payments-page"></div></section>
+      <section class="view" id="view-counterparties"><div id="counterparties-page"></div></section>
+      <section class="view" id="view-company"><div id="company-page"></div></section>
 
-      <!-- ===== STUB for other sections ===== -->
-      <section class="view" id="view-stub">
-        <h1 class="h-sys" id="stubTitle"></h1>
-        <p class="h-sub">Раздел интернет-банка недоступен в демо-версии.</p>
-        <div class="mount"><div class="mount-empty">Content</div></div>
-      </section>
+      <section class="view" id="view-documents"><div id="documents-page"></div></section>
 
       <!-- ===== CALENDAR ===== -->
       <section class="view" id="view-calendar">
@@ -423,41 +264,28 @@ body.cabinet-locked .app,body.cabinet-locked>.fab,body.cabinet-locked>.chat{disp
 <div id="insights-root"></div>
 <script type="module" src="/src/main.jsx"></script>
 <script>
-// demo data: a large-business client and a company of its group
-const DEMO = {
-  user: 'Смирнов И. В.',
-  companies: [
-    { id: 'U_19717', name: 'Розничная торговля топливом №19717', note: 'Розничная торговля топливом · Новосибирск', inn: '5407012345', acc: '40702 810 4 0295 0019717', balance: 1284590312.45, own: 384590312.45, credit: 2500000000, creditNote: 'Ключевая ставка + 2,1% · плавающая', deposit: 600000000, depNote: '13,9% годовых · до 15.12.2026' },
-    { id: 'U_147819', name: 'Оптовая торговля топливом №147819', note: 'Оптовая торговля топливом · Санкт-Петербург', inn: '7801012345', acc: '40702 810 1 0295 0147819', balance: 643120880.10, own: 643120880.10, credit: 1200000000, creditNote: 'Ключевая ставка + 2,4% · плавающая', deposit: 0, depNote: 'Нет открытых депозитов' },
-  ],
-  roles: [['owner', 'Собственник'], ['ceo', 'Генеральный директор'], ['cfo', 'Финансовый директор'], ['accountant', 'Главный бухгалтер'], ['treasury', 'Казначейство']],
-  statuses: [['Оплатить', 1, true], ['Подписать', 7], ['Отправить', 3], ['Доработать', 1], ['Отклонённые', 0], ['Черновики', 5], ['В работе у банка', 4]],
-  quick: ['Платёж по шаблону', 'Сформировать выписку', 'Импорт платежей из 1С', 'Выставить счёт', 'Валютный контроль'],
-  ops: [
-    ['Сегодня', 'Поставщик дизельного топлива', 'Оплата за ДТ по договору № 118/26', -412800000],
-    ['Сегодня', 'Транспортная компания', 'Оплата по топливным картам, сентябрь', 38450000],
-    ['Сегодня', 'УФК по Новосибирской области', 'Единый налоговый платёж', -96300000],
-    ['Вчера', 'Строительно-монтажная компания', 'Оплата дизельного топлива по счёту 2219', 12740000],
-    ['Вчера', 'Оптовая торговля топливом №147819', 'Поставка АИ-95 по договору № 7/26', -184100000],
-  ],
-};
-
+const CABINET_USER = 'Смирнов И. В.';
 const $ = s => document.querySelector(s);
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-const fmt = n => Math.abs(n).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-const money = n => { const [r, k] = fmt(n).split(','); return `${r}<span class="kop">,${k}&nbsp;₽</span>`; };
-let current = DEMO.companies[0], role = 'cfo';
+let current = null, role = 'cfo';
 
-function showView(view, title) {
+function showView(view) {
+  if (!document.getElementById('view-' + view)) view = 'home';
   document.querySelectorAll('.view').forEach(v => v.classList.toggle('active', v.id === 'view-' + view));
-  document.querySelectorAll('.nav-item').forEach(b => b.classList.toggle('active', b.dataset.view === view && (view !== 'stub' || b.dataset.title === title)));
-  if (view === 'stub') $('#stubTitle').textContent = title || '';
+  document.querySelectorAll('.nav-item').forEach(b => b.classList.toggle('active', b.dataset.view === view));
   document.body.classList.remove('side-open');
   window.scrollTo(0, 0);
   window.dispatchEvent(new CustomEvent('demo:view', { detail: { view } }));
 }
 window.showView = showView;
 document.addEventListener('click', e => {
+  const tool = e.target.closest('[data-cabinet-tool]');
+  if (tool) {
+    e.preventDefault();
+    document.body.classList.remove('side-open');
+    window.dispatchEvent(new CustomEvent('cabinet:tool', {detail:{tool:tool.dataset.cabinetTool}}));
+    return;
+  }
   const t = e.target.closest('[data-view]');
   if (!t) return;
   e.preventDefault();
@@ -465,67 +293,24 @@ document.addEventListener('click', e => {
 });
 
 function renderCompany() {
-  const c = current;
-  $('#whoCompany').textContent = c.name;
-  $('#whoUser').textContent = `${DEMO.user} · ${window.cabinetSession?.role_title || DEMO.roles.find(r => r[0] === role)?.[1] || role}`;
-  $('#accAmount').innerHTML = money(c.balance);
-  $('#accNo').textContent = c.acc;
-  $('#ownMoney').innerHTML = money(c.own);
-  $('#creditAmount').innerHTML = money(c.credit);
-  $('#creditNote').textContent = c.creditNote;
-  $('#depLine').innerHTML = c.deposit ? `Депозит <b>${money(c.deposit)}</b> · ${esc(c.depNote)}` : esc(c.depNote);
-  // The entry screen owns company/role selection in both build variants.
-  window.demoContext = { ...window.cabinetSession, company_meta:window.cabinetSession?.company, company: c.id, role };
-  window.dispatchEvent(new CustomEvent('demo:context', { detail: window.demoContext }));
-  renderOps();
+  if (!current) return;
+  $('#whoCompany').textContent = current.name;
+  $('#whoUser').textContent = `${CABINET_USER} · ${window.cabinetSession?.role_title || role}`;
+  window.demoContext = { ...window.cabinetSession, company_meta:window.cabinetSession?.company, company:current.id, role };
+  window.dispatchEvent(new CustomEvent('demo:context', { detail:window.demoContext }));
 }
-
-function renderHome() {
-  $('#quick').innerHTML = DEMO.quick.map(q =>
-    `<button class="card qtile" data-view="stub" data-title="${esc(q)}"><span class="qico"><svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M5 2h9l5 5v15H5z"/></svg></span>${esc(q)}</button>`).join('') +
-    `<div class="qside"><button aria-label="Добавить действие"><svg width="18" height="18" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button><button class="more" aria-label="Все действия"><svg width="18" height="18" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg></button></div>`;
-  $('#statuses').innerHTML = DEMO.statuses.map(([t, n, red]) =>
-    `<button data-view="stub" data-title="${esc(t)}">${esc(t)} <span class="cnt${red ? ' red' : ''}">${n}</span></button>`).join('');
-}
-
-let opsDir = 'all';
-function renderOps() {
-  const q = $('#opsSearch').value.toLowerCase();
-  const rows = DEMO.ops.filter(o => (opsDir === 'all' || (opsDir === 'in') === (o[3] > 0)) && (o[1] + o[2]).toLowerCase().includes(q));
-  const inc = rows.filter(o => o[3] > 0).reduce((s, o) => s + o[3], 0), out = rows.filter(o => o[3] < 0).reduce((s, o) => s + o[3], 0);
-  $('#sums').innerHTML = [['Входящий остаток', money(current.balance - inc - out)], ['Поступления <span style="color:var(--green)">↑</span>', '+' + money(inc)],
-    ['Списания <span style="color:var(--red)">↓</span>', '−' + money(out)], ['Исходящий остаток', money(current.balance)]]
-    .map(([l, v]) => `<div class="sum"><span>${l}</span><b>${v}</b></div>`).join('');
-  $('#ops').innerHTML = rows.length ? rows.map(([d, cp, p, s]) =>
-    `<tr><td>${esc(d)}</td><td><span class="cp">${esc(cp)}</span><span class="purpose">${esc(p)}</span></td><td class="${s > 0 ? 'in' : ''}">${s > 0 ? '+' : '−'}${money(s)}</td></tr>`).join('')
-    : `<tr><td colspan="3" style="text-align:center;color:var(--text-3)">Операций не найдено</td></tr>`;
-}
-document.querySelectorAll('.fchip[data-dir]').forEach(b => b.addEventListener('click', () => {
-  opsDir = b.dataset.dir;
-  document.querySelectorAll('.fchip[data-dir]').forEach(x => { x.classList.toggle('on', x === b); x.setAttribute('aria-pressed', x === b); });
-  renderOps();
-}));
-$('#opsSearch').addEventListener('input', renderOps);
 
 // Switch accounts through the same entry screen, keeping company and reader role together.
 $('#whoBtn').addEventListener('click', () => window.dispatchEvent(new Event('cabinet:switcher')));
 $('#cabinetLogout').addEventListener('click', () => window.dispatchEvent(new Event('cabinet:logout')));
 window.setCabinetContext = session => {
   window.cabinetSession = session;
-  current = { ...DEMO.companies[0], id:session.company_id, ...session.company,
-    name:session.company.name, note:[session.company.sector,session.company.city].filter(Boolean).join(' · '),
-    balance:session.company.balance || 0, own:session.company.balance || 0, credit:session.company.credit || 0,
-    deposit:session.company.deposit || 0, inn:'Демо', acc:'Демонстрационный счёт' };
-  current.id = session.company_id;
+  current = { ...session.company, id:session.company_id };
   role = session.role;
   renderCompany();
   showView('home');
   calLoadMonth();
 };
-
-const copy = t => navigator.clipboard?.writeText(t).catch(() => {});
-$('#copyNo').addEventListener('click', () => copy(current.acc.replace(/\s/g, '')));
-$('#copyReq').addEventListener('click', () => copy(`${current.name}, ИНН ${current.inn}, р/с ${current.acc.replace(/\s/g, '')}, АО «Альфа-Банк», БИК 044525593`));
 
 $('#burger').addEventListener('click', () => document.body.classList.add('side-open'));
 $('#sideOverlay').addEventListener('click', () => document.body.classList.remove('side-open'));
@@ -606,7 +391,7 @@ $('#calDays').addEventListener('click', e => {
 });
 calLoadMonth();
 
-renderHome(); renderCompany();
+
 </script>
 </body>
 </html>
