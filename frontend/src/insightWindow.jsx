@@ -6,7 +6,7 @@ import { Status } from '@alfalab/core-components/status';
 import { Plate } from '@alfalab/core-components/plate';
 import { Typography } from '@alfalab/core-components/typography';
 import { InsightDiscussion } from './discussion.jsx';
-import { loadInsight } from './api.js';
+import { loadInsight, suggestedFor } from './api.js';
 
 import { CONFIDENCE, confidenceDescription, day, view } from './insightView.js';
 import { InsightAssessment } from './insightAssessment.jsx';
@@ -128,6 +128,15 @@ function InsightDetails({ id, insight: i, compact, sources, company, onHide }) {
     requestAnimationFrame(() => document.getElementById(`${id}-${next}-tab`)?.focus());
   };
   const [feedbackTarget, setFeedbackTarget] = useState(null);
+  const [chips,setChips]=useState([]);
+  const [queued,setQueued]=useState(null);
+  useEffect(()=>{
+    if (!FEEDBACK_ENABLED) return;
+    let cancelled=false;
+    suggestedFor(i.job_id,i.id).then(list=>{if (!cancelled) setChips(list);});
+    return ()=>{cancelled=true;};
+  },[i.job_id,i.id]);
+  const askChip=text=>{setQueued({id:crypto.randomUUID(),text});changeTab('chat');};
   const v = useMemo(() => view(i, compact), [i, compact]);
   const [color, conf] = CONFIDENCE[i.confidence] || CONFIDENCE.low;
   const used = useMemo(() => [...new Set([...v.facts, ...v.why, ...v.risks, ...v.opportunities, ...v.bank_view, ...(i.hypotheses || [])].flatMap(x => x.sources || []))], [v, i]);
@@ -153,6 +162,7 @@ function InsightDetails({ id, insight: i, compact, sources, company, onHide }) {
                 <span className="agent-eyebrow">ОТ НОВОСТИ К РЕШЕНИЮ</span>
                 <h3>Разберём, что это меняет для вас</h3>
                 <p>Обсудите сценарии, уточните расчёты и определите следующие шаги вместе с агентом.</p>
+                {chips.length>0 && <div className="agent-chips" aria-label="Вопросы по инсайту">{chips.map(q=><button type="button" key={q} className="agent-chip" title={q} onClick={()=>askChip(q)}>{q}</button>)}</div>}
                 <button type="button" onClick={() => changeTab('chat')}>Обсудить с агентом<InsightIcon name="arrow" size={18} /></button>
               </div>
               <Sources ids={used} sources={sources} />
@@ -166,6 +176,7 @@ function InsightDetails({ id, insight: i, compact, sources, company, onHide }) {
         {/* Keep mounted: changing tabs must preserve drafts, scroll and an answer in flight. */}
         <ChatSplit reading={readerOpen}>
           <InsightDiscussion company={company} insight={i} variant="workspace" active={tab === 'chat'} feedbackTarget={feedbackTarget}
+            queuedQuestion={queued} onQueuedDone={()=>setQueued(null)}
             readerOpen={readerOpen} onToggleReader={() => setReaderOpen(value => !value)}
             selectedQuote={selectedQuote} onClearQuote={() => setSelectedQuote(null)} onQuote={setSelectedQuote} />
           {readerOpen ? <InsightReader insight={i} compact={compact} canAsk={FEEDBACK_ENABLED && !!i.pipeline_result}

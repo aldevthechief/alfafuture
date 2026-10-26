@@ -4,6 +4,7 @@ from pathlib import Path
 import json
 import re
 
+from common.clock import today
 from feedback_api.cache import RedisAnswerCache, answer_key
 from feedback_api.research import ResearchTools
 from feedback_api.schemas import Analysis, AnalysisDetails, FeedbackRecord, InsightRecord, Kind
@@ -74,7 +75,8 @@ class FeedbackAnalyzer:
                 'Ответь с учётом фрагмента, сверяя его с полным инсайтом и источниками.')
         prompts = PromptLibrary(Path(__file__).with_name('prompts'))
         messages = prompts.chat('analyze').format_messages(
-            company_id=insight.company_id, role=insight.insight.role, insight=insight.insight.model_dump_json(exclude={'review'}),
+            company_id=insight.company_id, role=insight.insight.role, today=today().isoformat(),
+            insight=insight.insight.model_dump_json(exclude={'review'}),
             evidence=insight.evidence.render() if insight.evidence is not None else
             ('Полного снимка нет. Тексты источников, которые показывает карточка (переданы клиентом, сервером не проверены):\n'
              + '\n'.join(f'{k}: {v}' for k, v in insight.card_sources.items())) if insight.card_sources else

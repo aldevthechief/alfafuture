@@ -2,6 +2,11 @@
   "name": "alfa-insights-demo",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": "20.19.0",
+    "npm": "10.8.2"
+  },
+  "packageManager": "npm@10.8.2",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -10,12 +15,12 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@alfalab/core-components": "^50.37.0",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "@alfalab/core-components": "50.37.0",
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
   },
   "devDependencies": {
-    "@vitejs/plugin-react": "^4.5.2",
-    "vite": "^6.3.5"
+    "@vitejs/plugin-react": "4.5.2",
+    "vite": "6.3.5"
   }
 }

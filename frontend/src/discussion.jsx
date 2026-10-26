@@ -2,7 +2,7 @@ import React, { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Button } from '@alfalab/core-components/button';
 import { Spinner } from '@alfalab/core-components/spinner';
-import { ApiError } from './api.js';
+import { ApiError, suggestedFor } from './api.js';
 import { ALLOW_INFERENCE } from './cabinetMode.js';
 import { answerSources, askQuestion, discussionHistory, FEEDBACK_ENABLED, sendReaction } from './feedback.js';
 import { InsightIcon } from './insightIcons.jsx';
@@ -85,7 +85,7 @@ export const HistoryMessages = memo(function HistoryMessages({ history, record, 
 });
 
 export function InsightDiscussion({ company, insight, variant, active = true, feedbackTarget,
-  readerOpen, onToggleReader, selectedQuote, onClearQuote, onQuote }) {
+  readerOpen, onToggleReader, selectedQuote, onClearQuote, onQuote, queuedQuestion, onQueuedDone }) {
   const [record, setRecord] = useState(null);
   const [history, setHistory] = useState([]);
   const [offset, setOffset] = useState(0);
@@ -94,6 +94,7 @@ export function InsightDiscussion({ company, insight, variant, active = true, fe
   const [busy, setBusy] = useState(false);
   const [reacting, setReacting] = useState(false);
   const [question, setQuestion] = useState('');
+  const [suggestions,setSuggestions]=useState([]);
   const [pending, setPending] = useState(null);
   const [error, setError] = useState('');
   const [reasons, setReasons] = useState(false);
@@ -131,11 +132,18 @@ export function InsightDiscussion({ company, insight, variant, active = true, fe
 
   useEffect(() => {
     alive.current = true;
-    if (available) load().catch(e => alive.current && setError(errorText(e)))
-      .finally(() => alive.current && setLoading(false));
-    else setLoading(false);
-    return () => { alive.current = false; };
+    const timer=available ? setTimeout(()=>load().catch(e=>alive.current && setError(errorText(e)))
+      .finally(()=>alive.current && setLoading(false)),active ? 0 : 1200) : null;
+    if (!available) setLoading(false);
+    return () => { alive.current = false; clearTimeout(timer); };
   }, [company, insight.id, insight.job_id, available]);
+
+  useEffect(()=>{
+    if (!available) return;
+    let cancelled=false;
+    suggestedFor(insight.job_id,insight.id).then(list=>{if (!cancelled) setSuggestions(list);});
+    return ()=>{cancelled=true;};
+  },[available,insight.job_id,insight.id]);
 
   const ask = useCallback(async (text, requestId = crypto.randomUUID(), selectedText = selectedQuote?.text || '', selectedSource = selectedQuote?.source || 'insight') => {
     if (!text || busy || !available) return;
@@ -152,6 +160,14 @@ export function InsightDiscussion({ company, insight, variant, active = true, fe
       if (alive.current) { setError(errorText(e)); setPending({ text, requestId, selectedText, selectedSource, failed:true }); }
     } finally { if (alive.current) setBusy(false); }
   }, [available, busy, company, insight, selectedQuote, onClearQuote]);
+
+  const queuedSent=useRef(null);
+  useEffect(()=>{
+    if (!queuedQuestion || queuedSent.current===queuedQuestion || !available || loading || busy || !record) return;
+    queuedSent.current=queuedQuestion;
+    onQueuedDone?.();
+    ask(queuedQuestion.text,queuedQuestion.id,'','insight');
+  },[queuedQuestion,available,loading,busy,record,ask,onQueuedDone]);
 
   async function react(kind, emoji) {
     if (reacting || !available) return;
@@ -223,6 +239,9 @@ export function InsightDiscussion({ company, insight, variant, active = true, fe
       </div>
     </div>
     <div className="chat-compose-area">
+      {available && !loading && suggestions.length>0 && <div className="chat-suggestions" aria-label="Вопросы по инсайту">
+        {suggestions.map(q=><button key={q} type="button" className="chat-suggestion" title={q} disabled={busy || !record} onClick={()=>ask(q,undefined,'','insight')}>{q}</button>)}
+      </div>}
       {error && <div className="chat-error"><p role="alert" className="discussion-error">{error}</p>
         {pending?.failed && <Button size={32} view="secondary" disabled={busy}
           onClick={() => ask(pending.text, pending.requestId, pending.selectedText || '', pending.selectedSource || 'insight')}>Повторить запрос ответа</Button>}

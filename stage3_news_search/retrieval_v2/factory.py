@@ -96,13 +96,14 @@ def model_id(model) -> str:
 def spec_input(facts: list[dict], search, model) -> dict[str, str]:
     """Everything the agent's result depends on; a cached spec is reused only if every part is equal: the company facts
     and the brief built from them, the prompt texts, the version, the model and its sampling, the step cap and probe
-    quota, and the news pool with the search configuration (probes see the pool: a new pool can open channels the agent
-    found empty)."""
+    quota. The news pool is deliberately NOT part of the key: queries describe the company, and in a news stream the pool
+    changes every tick (the key would miss and the agent, ~4 ₽, would rerun each time). The pool the spec was built on is
+    stored next to it (`pool`) for the record; a rebuild on a new pool is explicit (refresh=True or a VERSION bump)."""
     return {'version': VERSION, 'facts': _sha(json.dumps(facts, ensure_ascii=False, sort_keys=True, default=str)),
             'brief': _sha(deterministic(facts)),
             'prompts': _sha(PROMPTS.text('factory') + '\x00' + PROMPTS.text('factory_fewshots')),
             'model': model_id(model),
-            'max_steps': str(MAX_STEPS), 'quota': str(QUOTA), 'pool': search.fingerprint}
+            'max_steps': str(MAX_STEPS), 'quota': str(QUOTA)}
 
 
 def factory_spec(company_id: str, facts: list[dict], search, model=None, refresh: bool = False,
@@ -114,9 +115,9 @@ def factory_spec(company_id: str, facts: list[dict], search, model=None, refresh
     key = spec_input(facts, search, model)
     if path.exists() and not refresh:
         spec = json.loads(path.read_text(encoding='utf-8'))
-        if spec.get('input') == key:
-            return spec
         old = spec.get('input') or {}
+        if all(old.get(k) == key[k] for k in key):  # specs written before the pool left the key still carry `pool` in input
+            return spec
         changed = [k for k in key if old.get(k) != key[k]]
         print(f'factory cache miss for {company_id}: changed {", ".join(changed)}'
               + ('; frozen: the stored spec is used' if frozen else '; running the agent'), file=sys.stderr)
@@ -126,7 +127,7 @@ def factory_spec(company_id: str, facts: list[dict], search, model=None, refresh
         return None
     spec = Factory(search, model or ChatModels().agent(temperature=TEMPERATURE), MAX_STEPS).run(facts)
     if spec is not None:  # a failed run is not cached: the next call retries
-        spec['input'] = key
+        spec['input'], spec['pool'] = key, search.fingerprint
         SPECS.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(spec, ensure_ascii=False, indent=1), encoding='utf-8')
     return spec

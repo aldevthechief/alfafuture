@@ -63,11 +63,11 @@ assert first_docs == 2 * len(news), 'every news encoded once per model'
 
 # same input again: the cached factory spec is used, no model at all
 spec = factory.factory_spec('U_TEST', facts, cand.hybrid_search(news, events), ScriptedChatModel(responses=script))
-assert spec['input']['pool'] == cand.hybrid_search(news, events).fingerprint and spec['selected'][0]['reason'] == 'fuel_duty'
+assert spec['pool'] == cand.hybrid_search(news, events).fingerprint and 'pool' not in spec['input'] and spec['selected'][0]['reason'] == 'fuel_duty'
 cached = factory.factory_spec('U_TEST', facts, cand.hybrid_search(news, events), ScriptedChatModel(responses=[]))
 assert cached == spec, 'identical input -> cache hit (an empty scripted model would fail if called)'
 
-# strict key: changed facts or a changed pool -> the agent runs again
+# key: changed facts -> the agent runs again (the news pool is not in the key: a streaming pool must not rerun it)
 facts_b = facts + [{'cat': 'geo', 'text': 'Зарегистрирована: г. Омск, Омская область', 'entities': ['г. Омск', 'Омская область']}]
 try:
     factory.factory_spec('U_TEST', facts_b, cand.hybrid_search(news, events), ScriptedChatModel(responses=[]))
@@ -81,7 +81,8 @@ news2 = pd.concat([news.assign(id=news.id + 1000), pd.DataFrame({'id': [2000], '
 events2 = pd.concat([events.assign(news_ids=[[i + 1000 for i in ids] for ids in events.news_ids]),
                      pd.DataFrame({'event': [200], 'news_ids': [[2000]], 'title': ['Китай повысил пошлины на топливо'],
                                    'first_date': ['2026-10-02'], 'n_sources': [1]})])
-assert cand.hybrid_search(news2, events2).fingerprint != spec['input']['pool'], 'a new pool changes the fingerprint'
+assert cand.hybrid_search(news2, events2).fingerprint != spec['pool'], 'a new pool changes the fingerprint'
+assert factory.factory_spec('U_TEST', facts, cand.hybrid_search(news2, events2), ScriptedChatModel(responses=[])) == spec, 'new pool, same company: cache hit, no agent'
 res2, _ = cand.candidates('U_TEST', facts, 'cfo', news=news2, events=events2, budget=4, quota=5, frozen_factory=True)
 assert sum(doc_calls) - first_docs == 2, 'only the new text is encoded (once per model): vectors are keyed by text'
 assert 200 in set(res2.event), 'new news are searched with the stored generators'

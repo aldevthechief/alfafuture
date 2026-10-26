@@ -1,6 +1,6 @@
 # CPU image: the encoders run on CPU in this deployment (a 4 GB GPU does not fit them all),
 # news vectors are precomputed in data/retrieval_v2; only queries are encoded at runtime.
-FROM python:3.12-slim
+FROM python:3.12.10-slim-bookworm
 WORKDIR /app
 ENV PYTHONUNBUFFERED=1 CUDA_VISIBLE_DEVICES=-1 \
     PIP_DEFAULT_TIMEOUT=120 PIP_RETRIES=10 PIP_DISABLE_PIP_VERSION_CHECK=1

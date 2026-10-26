@@ -36,7 +36,7 @@ class Service:
         self.exports=Jobs(self.root/'exports',2)
         self._checkpointing=checkpointing
         self._checkpointer=None
-        self._compact_locks={}; self.auto_compact=auto_compact
+        self._compact_locks={}; self._suggest_locks={}; self.auto_compact=auto_compact
 
     @property
     def checkpointer(self):
@@ -61,11 +61,16 @@ class Service:
 
     def analyze(self,request):
         job=self.agents.submit('analysis',request.model_dump(),lambda:self.run(request))
-        if self.auto_compact:  # screen versions right after the analysis, in their own thread: the agent worker is free
+        if self.auto_compact:  # screen versions and suggested questions right after the analysis, in their own thread
             import threading
             self.agents.futures[job['id']].add_done_callback(
-                lambda _, id=job['id']: threading.Thread(target=self.compact,args=(id,),daemon=True).start())
+                lambda _, id=job['id']: threading.Thread(target=self._postprocess,args=(id,),daemon=True).start())
         return job
+
+    def _postprocess(self, job_id: str) -> None:
+        for work in (self.compact,self.suggest):
+            try: work(job_id)
+            except Exception as exc: print(f'postprocess {work.__name__}: {type(exc).__name__}')
 
     def run(self,r):
         import pipeline
@@ -234,7 +239,7 @@ class Service:
                for n, r in enumerate(results) if r.get('status') == 'ready' and r.get('insight')}
         rows = [r for r in results if id(r) in ids]
         key = lambda r: ids[id(r)]
-        done = json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
+        done = self._saved_presentation('compact',job_id)
         if not cache_only and (todo := [r for r in rows if key(r) not in done]):
             model = self.models_factory().agent(temperature=0.0).model_copy(update={'reasoning_effort': 'low'})
             compactor = InsightCompactor(model)
@@ -247,6 +252,61 @@ class Service:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(json.dumps(done, ensure_ascii=False), encoding='utf-8')
         return {key(r): done[key(r)] for r in rows if key(r) in done}
+
+    def suggest(self, job_id: str, job=None, cache_only=False) -> dict:
+        """Suggested questions per finished insight ({insight id: [q1, q2, q3]}), api/suggested/<job>.json.
+        One GLM call per insight (low reasoning, structured), all in parallel; computed right after the analysis
+        (auto) and by the API; a per-job lock keeps it to one computation."""
+        import asyncio, json, threading
+        with self._suggest_locks.setdefault(job_id, threading.Lock()):
+            path = self.root / 'suggested' / f'{job_id}.json'
+            results = ((job if job is not None else self.agents.get(job_id)).get('result') or {}).get('results', [])
+            ids = {id(r): r['insight'].get('id') or f"row-{n}-{r.get('news_id', 'bank')}"
+                   for n, r in enumerate(results) if r.get('status') == 'ready' and r.get('insight')}
+            rows = [r for r in results if id(r) in ids]
+            key = lambda r: ids[id(r)]
+            from stage6_insight_generation.insight_suggestions.suggest import problems
+            done = self._saved_presentation('suggested',job_id)
+            done = {k:v for k,v in done.items() if isinstance(v,list)
+                    and all(isinstance(q,str) for q in v) and not problems(v)}
+            if not cache_only and (todo := [r for r in rows if not done.get(key(r))]):  # a failed (None) entry is retried
+                model = self.models_factory().agent(temperature=0.4, max_tokens=8000).model_copy(
+                    update={'reasoning_effort': 'low'})
+                from stage6_insight_generation.insight_suggestions.suggest import QuestionSuggester, profile_lines
+                suggester = QuestionSuggester(model)
+                company_id = next((r['insight'].get('company_id') for r in todo
+                                   if r['insight'].get('company_id')), None)
+                profile = ''
+                if company_id:
+                    try:
+                        from stage2_company_facts.profile.integration import load_company
+                        profile = profile_lines(load_company(company_id).facts)
+                    except Exception:
+                        profile = ''
+                async def generate():  # gather needs a running loop: asyncio.run(gather(...)) fails in a worker thread
+                    return await asyncio.gather(*(suggester.asuggest(r['insight'], profile) for r in todo), return_exceptions=True)
+                found = asyncio.run(generate())
+                from common.llm.log import log_tool
+                for r, c in zip(todo, found):
+                    if isinstance(c, BaseException):
+                        log_tool('suggest_error', {'title': r['insight'].get('title')}, f'{type(c).__name__}: {c}')
+                done |= {key(r): None if isinstance(c, BaseException) else c for r, c in zip(todo, found)}
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(json.dumps(done, ensure_ascii=False), encoding='utf-8')
+            return {key(r): done[key(r)] for r in rows if key(r) in done}
+
+    def _saved_presentation(self, kind: str, job_id: str) -> dict:
+        """Runtime overrides checked bundled demo text; damaged optional caches do not break a card."""
+        import json
+        saved={}
+        bundled=Path(__file__).with_name('demo_cache')/kind/f'{job_id}.json'
+        for path in (bundled,self.root/kind/f'{job_id}.json'):
+            try:
+                value=json.loads(path.read_text(encoding='utf-8'))
+                if isinstance(value,dict): saved.update(value)
+            except (OSError,ValueError):
+                pass
+        return saved
 
     def latest_rows(self, company_id: str, role: str, user_id: str | None = None) -> list[dict]:
         """Result rows of the newest finished backend analysis of this pair that this user may see: their own first,

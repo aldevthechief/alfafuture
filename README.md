@@ -138,13 +138,43 @@ API должен работать в том же режиме, что и фро�
 (PowerShell: `$env:CUDA_VISIBLE_DEVICES="-1"`; пустая строка на Windows CUDA не отключает); вектор статей
 предвычислен (`data/retrieval_v2/*.npz`), на CPU кодируется только запрос — это секунды.
 
-Команды ниже выполняются из корня репозитория. Базовое окружение — Python 3.12 (см. `requirements.txt`);
-офлайн-проверки текущей интеграции также прошли на Python 3.13 в Windows.
+Команды ниже выполняются из корня репозитория. Зафиксированное окружение — **CPython 3.12.10**
+(`.python-version`, `Dockerfile`). Для фронтенда — **Node.js 20.19.0 / npm 10.8.2**
+(`frontend/.node-version`, `frontend/.nvmrc`, `engines` и `packageManager` в `frontend/package.json`).
+Docker использует те же версии Python и Node.js. Офлайн-проверки текущей интеграции также
+проходили на Python 3.13 в Windows; это дополнительное окружение, а не версия для воспроизведения.
 
 ```powershell
+# Сначала выбрать Python 3.12.10 (pyenv/uv читают .python-version).
+python --version
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+# Для запуска тестов:
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
 ```
+
+Во фронтенде установка выполняется из существующего lock-файла:
+
+```powershell
+cd frontend
+# nvm use для nvm, поддерживающего .nvmrc; иначе выбрать Node.js 20.19.0 вручную.
+node --version
+npm --version
+npm ci
+npm run build
+cd ..
+```
+
+`requirements.txt` содержит точные `==`-версии прямых и ключевых Python-зависимостей;
+`requirements-dev.txt` фиксирует pytest. Это эквивалент фиксации ключевых зависимостей,
+не полный lock транзитивного Python-дерева. `frontend/package-lock.json` фиксирует и
+транзитивные npm-зависимости с integrity; его нужно хранить в Git и использовать `npm ci`.
+При обновлении фронтенда менять манифест и lock-файл вместе выбранной версией npm.
+При обновлении Python/Node.js согласованно менять version-файлы и Dockerfile.
+Системные пакеты образов, Redis/nginx и ревизии скачиваемых моделей не закреплены digest/хешами.
+
+Сторонние библиотеки, модели, датасеты, сервисы, визуальные источники и смоделированные
+банковские интеграции перечислены в [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 Локально положить три таблицы кейса в `data/`: `df_Uid_data_hack.csv`, `df_Uid_payment_hack.csv`,
 `df_Fid_Uid_link_hack.csv`. Новостной корпус `data/news/news.parquet` уже отслеживается в Git.

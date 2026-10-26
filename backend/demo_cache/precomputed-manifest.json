@@ -1,0 +1,53 @@
+{
+  "source": "e7cff1855e47f74d377114821fbc762f59d919c1",
+  "feeds": {
+    "U_14366_cfo": {
+      "cards": 9,
+      "questions": 9,
+      "compact": 0
+    },
+    "U_177581_ceo": {
+      "cards": 5,
+      "questions": 0,
+      "compact": 0
+    },
+    "U_3263_ceo": {
+      "cards": 5,
+      "questions": 5,
+      "compact": 0
+    },
+    "U_4217_treasury": {
+      "cards": 4,
+      "questions": 4,
+      "compact": 0
+    },
+    "U_42222_owner": {
+      "cards": 13,
+      "questions": 13,
+      "compact": 9
+    },
+    "U_44792_cio": {
+      "cards": 10,
+      "questions": 10,
+      "compact": 7
+    },
+    "U_57706_treasury": {
+      "cards": 4,
+      "questions": 0,
+      "compact": 0
+    },
+    "U_99262_accountant": {
+      "cards": 12,
+      "questions": 12,
+      "compact": 8
+    }
+  },
+  "supplemental_questions": {
+    "demo-U_14366-ceo": 3
+  },
+  "excluded": {
+    "not_ready": 42,
+    "missing_frozen_evidence": 60
+  },
+  "note": "Frozen checked rows only. No Redis seed, opaque LLM answers, private jobs or reconstructed live facts."
+}

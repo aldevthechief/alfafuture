@@ -267,3 +267,8 @@
 }
 @media(max-width:600px) {.chat-reader-toggle{padding:7px;font-size:10px;gap:4px}.chat-reader-toggle>svg{width:14px;height:14px}.chat-reader-toggle+.agent-connection{display:none}}
 @media(prefers-reduced-motion:reduce) {.insight-reader,.chat-selected-quote{animation:none}}
+
+.agent-chips,.chat-suggestions{display:flex;flex-wrap:wrap;gap:6px;min-width:0;margin:8px 0}
+.agent-chips .agent-chip,.chat-suggestion{font:inherit;font-size:12px;line-height:1.4;text-align:left;padding:7px 10px;border-radius:12px;color:var(--text);border:1px solid var(--agent-border);background:var(--card);max-width:100%;overflow-wrap:anywhere}
+.agent-chips .agent-chip:hover,.chat-suggestion:hover:not(:disabled){border-color:var(--agent-accent)}
+.chat-suggestion:disabled{opacity:.5;cursor:default}

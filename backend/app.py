@@ -2,6 +2,7 @@
 import hashlib
 import json
 import os
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated
@@ -16,7 +17,8 @@ from pydantic import ValidationError
 
 from backend.jobs import QueueFull
 from backend.cabinet import Precomputed, cached_job, cabinet_feed, catalog as cabinet_catalog, search_companies
-from backend.insight_previews import detail, metadata, preview_feed
+from backend import top5
+from backend.insight_previews import detail, metadata, preview_feed, rows_of
 from backend.schemas import AnalysisRequest, AskRequest, BatchRequest, PreparationRequest, SearchRequest, JobResponse
 from backend.service import Service
 from backend.payments import PaymentAnalytics
@@ -26,6 +28,10 @@ from stage5_insight_detection.bank_analytics.ocr import PDF_DIR
 
 def create_app(service=None, cors_origins=None, payment_analytics=None, staff_token=None):
     payment_reports = payment_analytics if payment_analytics is not None else PaymentAnalytics()
+    def cabinet_jobs():
+        with svc().agents.lock:
+            return tuple(dict(job) for job in svc().agents.items.values())
+
     @asynccontextmanager
     async def lifespan(app):
         app.state.service=service or Service(checkpointing=True, agent_workers=1, auto_compact=True)
@@ -36,10 +42,23 @@ def create_app(service=None, cors_origins=None, payment_analytics=None, staff_to
                 try: app.state.service.prepare(pdf,PreparationOptions(),PDF_DIR)
                 except QueueFull: break
         app.state.precomputed=Precomputed(cabinet_jobs, lambda: app.state.service.root).start()
+        warming_stopped=threading.Event()
+        def warm_profiles():
+            pre = app.state.precomputed
+            for _ in range(120):
+                if pre.checked_at: break
+                if warming_stopped.wait(1): return
+            for company in dict.fromkeys(r['company_id'] for r in pre.report if r.get('listed')):
+                if warming_stopped.is_set(): return
+                try: company_payload(company)
+                except Exception: pass
+        if service is None:
+            threading.Thread(target=warm_profiles, name='warm-profiles', daemon=True).start()
         try:
             yield
         finally:
             import asyncio
+            warming_stopped.set()
             await asyncio.to_thread(app.state.precomputed.stop)
             await asyncio.to_thread(app.state.service.close)
 
@@ -166,6 +185,17 @@ def create_app(service=None, cors_origins=None, payment_analytics=None, staff_to
     def insight_detail(job_id: str, result_index: int, x_user_id: User = None, insight_id: str | None = None):
         return insight_projection(job_id, x_user_id, lambda job: detail(job, result_index, insight_id))
 
+    @app.get('/v1/jobs/{job_id}/suggested',tags=['jobs'],
+             summary='Suggested questions per insight of a finished analysis ({insight id: [q1, q2, q3]})')
+    async def suggested(job_id: str, x_user_id: User = None):
+        import asyncio
+        job = insight_projection(job_id, x_user_id, lambda job: job)
+        # opening a card never starts a model: chips come from the saved file (experiments/suggested_questions/run_company.py,
+        # or the analysis itself); SUGGEST_ON_DEMAND=1 lets this endpoint generate the missing ones
+        return await asyncio.to_thread(svc().suggest, job_id, job=job,
+                                       cache_only=os.environ.get('CABINET_MODE', 'full') == 'server'
+                                       or os.environ.get('SUGGEST_ON_DEMAND', '0') != '1')
+
     @app.get('/v1/jobs/{job_id}/compact',tags=['jobs'],summary='Screen versions of the insights of a finished analysis')
     async def compact(job_id: str, x_user_id: User = None):
         import asyncio
@@ -193,10 +223,6 @@ def create_app(service=None, cors_origins=None, payment_analytics=None, staff_to
     def reports():
         with svc().catalog.lock: return dict(active=dict(svc().catalog.current))
 
-    def cabinet_jobs():
-        with svc().agents.lock:
-            return tuple(dict(job) for job in svc().agents.items.values())
-
     @app.get('/v1/cabinet/accounts',tags=['companies'])
     def cabinet_accounts(x_user_id: User = None):
         return cabinet_catalog(cabinet_jobs(), x_user_id, svc().root, extra=app.state.precomputed.accounts)
@@ -212,6 +238,20 @@ def create_app(service=None, cors_origins=None, payment_analytics=None, staff_to
             return cabinet_feed(company_id, role, cabinet_jobs(), x_user_id, svc().root)
         except ValueError:
             raise HTTPException(422, 'Invalid company or role')
+
+    @app.get('/v1/cabinet/top',tags=['companies'],summary='Default top-5 of the feed: 3 news + 2 analytics as a soft quota, ranked by one LLM call (cached)')
+    def reader_top(company_id: str, role: str, x_user_id: User = None):
+        try:
+            feed = cabinet_feed(company_id, role, cabinet_jobs(), x_user_id, svc().root)
+        except ValueError:
+            raise HTTPException(422, 'Invalid company or role')
+        jobs = {job['id']: job for job in cabinet_jobs()}
+        cards = []
+        for c in feed['insights']:
+            job = jobs.get(c['job_id']) or jobs.setdefault(c['job_id'], cached_job(c['job_id'], svc().root))
+            cards.append(top5.card(c, rows_of(job)[c['result_index']]))
+        return top5.rank(company_id, role, cards, svc().root,models_factory=svc().models_factory,
+                         cache_only=os.environ.get('CABINET_MODE','full')=='server')
 
     @app.get('/v1/cabinet/companies',tags=['companies'])
     def cabinet_companies(q: str = ''):
@@ -279,15 +319,29 @@ def create_app(service=None, cors_origins=None, payment_analytics=None, staff_to
                 yield f'\n[ошибка] {type(exc).__name__}: {exc}'
         return StreamingResponse(gen(), media_type='text/plain; charset=utf-8')
 
-    @app.get('/v1/companies/{company_id}',tags=['companies'])
-    def company(company_id: str):
+    from functools import lru_cache
+
+    @lru_cache(maxsize=64)
+    def cached_company_payload(company_id: str, version):
         from stage2_company_facts.profile.integration import company_inputs
         from stage2_company_facts.profile.load import load_profile
         from backend.company_profile import display_profile
+        profile = load_profile(company_id)
+        result = company_inputs(profile)
+        return jsonable_encoder(dict(card=result.card, facts=result.facts, profile=display_profile(profile)))
+
+    def company_payload(company_id):
+        import time
+        from stage2_company_facts.profile.load import PROFILES
         try:
-            profile = load_profile(company_id)
-            result = company_inputs(profile)
-            return jsonable_encoder(dict(card=result.card, facts=result.facts, profile=display_profile(profile)))
+            info=PROFILES.stat(); version=(info.st_mtime_ns,info.st_ctime_ns,info.st_size)
+        except OSError: version=None
+        return cached_company_payload(company_id,(version,int(time.monotonic()//60)))
+
+    @app.get('/v1/companies/{company_id}',tags=['companies'])
+    def company(company_id: str):
+        try:
+            return company_payload(company_id)
         except (KeyError,ValueError,FileNotFoundError) as exc: raise HTTPException(404,'Company not found') from exc
 
     def payment_result(method, company_id, *args, **kwargs):

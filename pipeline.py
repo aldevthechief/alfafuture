@@ -20,7 +20,8 @@ lexical = the facet search. --candidates limits distinct events in v2 / hybrid m
 CLI/API only run the judge engine. The legacy run_loop() and its modules remain for direct development use;
 shared computations and audit are still used by judge. PDF preparation runs before the judge graph.
 """
-import argparse, asyncio, contextvars, hashlib, json, math, operator, sys
+import argparse, asyncio, contextvars, hashlib, json, math, operator, os, sys
+from datetime import date
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Annotated, TYPE_CHECKING, TypedDict
@@ -38,7 +39,8 @@ from langgraph.types import Send
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from common.data import DATA
 from common.llm import ChatModels, StructuredOutputError
-from common.news_corpus import StaleNewsReferences, bind_result, save_results
+from common.news_corpus import StaleNewsReferences, article_fingerprint, bind_result, save_results
+from common.stage_cache import StageCache, digest, model_id, prompts_version, code_version
 from common import progress
 from common.roles import roles
 from common.search import corpus_fingerprint, news_pool
@@ -49,14 +51,18 @@ from stage2_company_facts.deterministic_facts.facts import build
 from stage3_news_search.retrieval import candidates
 from stage4_news_relevance.consequence_extraction.consequences import ConsequenceExtractor
 from stage4_news_relevance.relevance_scoring.relevance import RelevanceScorer
+from stage4_news_relevance.relevance_scoring.relevance import PROMPTS as RELEVANCE_PROMPTS, Relevance
 from stage5_insight_detection.bank_analytics.search import BankAnalytics
 from stage5_insight_detection.insight_dedup.dedup import DedupGate
 from stage5_insight_detection.insight_judge.judge import InsightJudge
+from stage5_insight_detection.insight_judge.judge import PROMPTS as JUDGE_PROMPTS, InsightDecision
 from stage5_insight_detection.news_enrichment.related_news import RelatedNews
 from stage6_insight_generation.insight_writer.insight_v2 import migrate_result as migrate_v2
 from stage6_insight_generation.business_value import enrich
 from common.credibility import for_result
 from stage6_insight_generation.insight_writer.writer import Evidence, InsightWriter
+from stage6_insight_generation.insight_writer.writer import PROMPTS as WRITER_PROMPTS
+from stage6_insight_generation.insight_writer.insight import Insight, Review
 
 if TYPE_CHECKING:
     from stage5_insight_detection.bank_analytics.prepare import PreparationOptions as BankPreparationOptions, PreparedBank
@@ -108,6 +114,19 @@ class InsightPipeline:
         self.dedup = DedupGate(agent.model_copy(update=low) if low else agent)
         self._graph = None
         self._params: dict = {}
+        self.stages={name:StageCache(name) for name in ('relevance','judge','writer')}
+        self._stage_cache_on=os.environ.get('STAGE_CACHE','1')!='0'
+        root=Path(__file__).resolve().parent
+        implementation=code_version(Path(__file__),*(root/path for path in (
+            'common/stage_cache.py','common/safety.py','common/data.py',
+            'stage5_insight_detection/insight_judge/judge.py','stage5_insight_detection/insight_judge/calculations.py',
+            'stage5_insight_detection/analyst_loop/compute.py','stage6_insight_generation/insight_writer/writer.py')))
+        self._version={
+            'relevance':digest('integrated-v1',implementation,prompts_version(RELEVANCE_PROMPTS),model_id(cheap)),
+            'judge':digest('integrated-v1',implementation,prompts_version(JUDGE_PROMPTS),model_id(agent),InsightDecision.model_json_schema()),
+            'writer':digest('integrated-v1',implementation,prompts_version(WRITER_PROMPTS),model_id(agent),Insight.model_json_schema(),Review.model_json_schema()),
+        }
+        self._bank_signature=None
 
     @pinned_run
     def run(self, company_id: str, role: str, n_candidates: int = 30, n_judge: int = 5,
@@ -116,6 +135,7 @@ class InsightPipeline:
         the joins rank by the retrieval input index, so workers=1 keeps the call order deterministic for scripted
         test models exactly as the thread pool did."""
         pers = scoped_personalization(personalization, company_id, role)
+        self._bank_signature=None
         self._params = {'company_id': company_id, 'role': role, 'n_judge': n_judge,
                         'personalization': pers, 'user_context': personalization_context(pers)}
         progress.enter('collecting')
@@ -187,6 +207,78 @@ class InsightPipeline:
             raise StaleNewsReferences('News changed during retrieval; restart the batch')
         return shortlist.to_dict('records')
 
+    def _data_signature(self):
+        # Payment scenarios read the case tables directly, beyond the facts printed in a card.
+        from common.data import DATA as input_root
+        paths=[input_root/name for name in ('df_Uid_data_hack.csv','df_Uid_payment_hack.csv','df_Fid_Uid_link_hack.csv')]
+        paths.append(input_root/'companies'/'profiles.jsonl')
+        def version(path):
+            try:
+                info=path.stat();return (str(path),info.st_size,info.st_mtime_ns,info.st_ctime_ns)
+            except OSError:return (str(path),None)
+        return digest([version(path) for path in paths])
+
+    def _cached(self, stage: str, key: str):
+        return self.stages[stage].get(key)
+
+    def _stored(self, stage: str, key: str, value) -> None:
+        self.stages[stage].put(key, value)  # objects built without __init__ (tests) have no cache: callers check _stage_cache_on
+
+    def _relevance_key(self, news: dict, facts_text: str, role: str) -> str:
+        return digest('relevance', self._version['relevance'], article_fingerprint(news), facts_text, role)
+
+    async def _relevance(self, news: dict, facts_text: str, role: str) -> Relevance:
+        if not getattr(self, '_stage_cache_on', False):
+            return await self.relevance.ascore(news, facts_text, role)
+        key = self._relevance_key(news, facts_text, role)
+        if (hit := self._cached('relevance', key)) is not None:
+            return Relevance(**hit)
+        value = await self.relevance.ascore(news, facts_text, role)
+        self._stored('relevance', key, value.model_dump())
+        return value
+
+    def _bank_sig(self) -> str:
+        if self._bank_signature is None:
+            self._bank_signature = digest(getattr(self.bank,'chunks',[]),getattr(self.bank,'rows',[]),getattr(self.bank,'segments',{})) if self.bank is not None else ''
+        return self._bank_signature
+
+    def _event_sig(self, news: dict) -> str:
+        """The news and the rest of its event: a new report joining the event changes what the judge can read."""
+        if not isinstance(self.related, RelatedNews):
+            return ''
+        members = self.related.members.get(self.related.event_of.get(news['id']), [])
+        return digest(sorted(article_fingerprint(self.related.get(i)) for i in members if i in self.related.row_of))
+
+    async def _judge(self, news: dict, stage4: dict) -> InsightDecision:
+        """The judge's decision for what it reads: article, its event, company facts, role, bank library, stage-4 input."""
+        p = self._params
+        if not getattr(self, '_stage_cache_on', False):
+            return await self.judge.adecide(news['id'], p['company_id'], p['facts'], p['role'], stage4)
+        key = digest('judge', self._version['judge'], article_fingerprint(news), self._event_sig(news), p['facts'], p['role'],
+                     p['company_id'], self._bank_sig(), date.today().isoformat(), self._data_signature(), self._relevance_key(news, '\n'.join(p['key_facts']), p['role']),
+                     stage4)
+        if (hit := self._cached('judge', key)) is not None:
+            decision = InsightDecision.model_validate(hit['decision'])  # tool-collected fields are excluded from model_dump
+            decision.calculation_facts, decision.calculation_bank, decision.bank_evidence = (
+                hit['calculation_facts'], hit['calculation_bank'], hit['bank_evidence'])
+            return decision
+        decision = await self.judge.adecide(news['id'], p['company_id'], p['facts'], p['role'], stage4)
+        self._stored('judge', key, dict(decision=decision.model_dump(), calculation_facts=decision.calculation_facts,
+                                        calculation_bank=decision.calculation_bank, bank_evidence=decision.bank_evidence))
+        return decision
+
+    async def _written(self, company_id: str, role: str, decision: InsightDecision, evidence: Evidence) -> tuple[Insight, Review]:
+        if not getattr(self, '_stage_cache_on', False):
+            return await self.writer.awrite(company_id, role, decision.model_dump_json(), evidence)
+        key = digest('writer', self._version['writer'], company_id, role, decision.model_dump_json(),
+                     [article_fingerprint(n) for n in evidence.news], evidence.facts, evidence.bank, evidence.calculations, evidence.origin, sorted(evidence.full_bank_ids))
+        if (hit := self._cached('writer', key)) is not None:
+            return Insight.model_validate(hit['insight']), Review.model_validate(hit['review'])
+        insight, review = await self.writer.awrite(company_id, role, decision.model_dump_json(), evidence)
+        if review.ok:  # a rejected draft is retried next time
+            self._stored('writer', key, dict(insight=insight.model_dump(), review=review.model_dump()))
+        return insight, review
+
     def _record(self, news: dict, **fields) -> dict:
         result = {'news_id': news['id'], 'title': news['title'], **fields}
         result['matched_fragments'] = news.get('matched_fragments', [])
@@ -211,7 +303,7 @@ class InsightPipeline:
             plausibility = self.related.event_plausibility(news['id'])
             stage = 'relevance'
             try:
-                relevance = await self.relevance.ascore(news, '\n'.join(p['key_facts']), p['role'])
+                relevance = await self._relevance(news, '\n'.join(p['key_facts']), p['role'])
                 stage = 'consequences'
                 stage4 = {'matched_fragments': news.get('matched_fragments', []), 'relevance': relevance.model_dump(),
                           'consequences': await self.consequences.aextract(news), 'plausibility': plausibility}
@@ -255,7 +347,7 @@ class InsightPipeline:
         p = self._params
         news, result = item['news'], {'stage4': item['stage4']}
         try:
-            decision = await self.judge.adecide(news['id'], p['company_id'], p['facts'], p['role'], item['stage4'])
+            decision = await self._judge(news,item['stage4'])
         except Exception as error:  # a dropped connection or a timeout loses this news, not the whole batch
             result.update(status='model_error', error=self._model_error(error, 'judge') if isinstance(error, StructuredOutputError)
                           else {'stage': 'judge', 'type': type(error).__name__, 'message': str(error)[:500]})
@@ -329,11 +421,9 @@ class InsightPipeline:
             bank = decision.bank_evidence or ((await asyncio.to_thread(self.bank.search, decision.mechanism)) if self.bank else [])
             bank = list({b.get('id') or f'bank:{b["report"]}:{b["page"]}': b
                          for b in [*bank, *decision.calculation_bank]}.values())
-            insight, review = await self.writer.awrite(company_id, role, decision.model_dump_json(),
-                                                       Evidence(news=[news, *related], facts=all_facts, bank=bank,
-                                                                calculations=calculations,
-                                                                full_bank_ids={b['id'] for b in [*decision.bank_evidence,
-                                                                                               *decision.calculation_bank]}))
+            evidence=Evidence(news=[news,*related],facts=all_facts,bank=bank,calculations=calculations,
+                              full_bank_ids={b['id'] for b in [*decision.bank_evidence,*decision.calculation_bank]})
+            insight,review=await self._written(company_id,role,decision,evidence)
             result |= {'insight' if review.ok else 'draft': insight.model_dump(),
                        'review': review.model_dump(), 'status': 'ready' if review.ok else 'review_rejected'}
             from common.evidence import EvidenceSnapshot

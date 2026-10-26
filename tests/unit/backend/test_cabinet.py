@@ -98,6 +98,7 @@ class CabinetTests(unittest.TestCase):
             self.models.assert_not_called()
 
     def test_every_cabinet_merges_cached_analytics_and_completed_news_without_duplicates(self):
+        self.enterContext(patch('backend.cabinet.NEWS_CACHE',Path(self.tmp.name)/'empty-news'))
         def job(id, company='U_14366', role='cfo', user='reader', status='succeeded', date='2026-10-26'):
             row = dict(status='ready', news_id=123, insight=dict(id='saved-news', origin='news', role=role,
                 title='Saved news', what_happened=[dict(text='Source fact', sources=['news:123'])]),
@@ -138,6 +139,7 @@ class CabinetTests(unittest.TestCase):
             self.models.assert_not_called()
 
     def test_local_analytics_cache_is_combined_with_saved_news_and_running_job_metadata(self):
+        self.enterContext(patch('backend.cabinet.NEWS_CACHE',Path(self.tmp.name)/'empty-news'))
         # A cache outside the committed demo set must also be included, without a model call.
         run=json.loads((CACHE/'U_14366_cfo.json').read_text(encoding='utf-8'))
         run=copy.deepcopy(run)

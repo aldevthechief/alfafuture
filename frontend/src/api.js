@@ -93,6 +93,7 @@ export const startAnalysis = (company, role, options = {}) => {
 
 export const cabinetAccounts = () => call('/v1/cabinet/accounts');
 export const cabinetFeed = (company, role, signal) => call(`/v1/cabinet/feed?company_id=${encodeURIComponent(company)}&role=${encodeURIComponent(role)}`,{signal});
+export const cabinetTop = (company, role, signal) => call(`/v1/cabinet/top?company_id=${encodeURIComponent(company)}&role=${encodeURIComponent(role)}`,{signal});
 
 export function followJob(id,onUpdate,{signal,onError}={}) {
   return followUpdates({signal,onUpdate,onError,
@@ -132,6 +133,28 @@ const claims = list => (list || []).map(c => ({ id: c.id, text: c.text, sources:
 
 export const jobPreviews = id => call(`/v1/jobs/${id}/insights`);
 export const compactOf = id => call(`/v1/jobs/${encodeURIComponent(id)}/compact`);
+const suggestedByJob = new Map();
+export function suggestedFor(jobId, insightId) {
+  if (!API_ENABLED || !jobId) return Promise.resolve([]);
+  if (!suggestedByJob.has(jobId)) {
+    const promise=call(`/v1/jobs/${encodeURIComponent(jobId)}/suggested`).then(map=>{
+      // Postprocessing may still be running when the first card opens; let a later open retry an empty cache.
+      if (!map || !Object.values(map).some(value=>Array.isArray(value) && value.length)) {
+        if (suggestedByJob.get(jobId)===promise) suggestedByJob.delete(jobId);
+      }
+      return map;
+    }).catch(()=>{
+      if (suggestedByJob.get(jobId)===promise) suggestedByJob.delete(jobId);
+      return {};
+    });
+    suggestedByJob.set(jobId,promise);
+    while (suggestedByJob.size>32) suggestedByJob.delete(suggestedByJob.keys().next().value);
+  }
+  return suggestedByJob.get(jobId).then(map=>{
+    const questions=map?.[insightId];
+    return Array.isArray(questions) ? questions.filter(q=>typeof q==='string' && q.length<=60 && q.endsWith('?')).slice(0,3) : [];
+  });
+}
 
 const openedInsights = new Map();
 export function loadInsight(card, company) {

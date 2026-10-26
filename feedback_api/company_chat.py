@@ -3,6 +3,7 @@ import json
 import re
 from pathlib import Path
 
+from common.clock import today
 from common.evidence import EvidenceSnapshot, FactEvidence
 from feedback_api.analyzer import _replace_refs
 from feedback_api.research import ResearchTools
@@ -37,7 +38,7 @@ def analyze_company(processor, conversation, user_id, message, history, on_respo
                                   date=row.created_at[:10], answer=row.analysis.response if row.analysis else None), aliases)
 
     messages = PromptLibrary(Path(__file__).with_name('prompts')).chat('company_chat').format_messages(
-        company_id=conversation.company_id, role=conversation.role,
+        company_id=conversation.company_id, role=conversation.role, today=today().isoformat(),
         card=json.dumps(ctx.card, ensure_ascii=False), evidence=ctx.evidence.render(),
         user_context=ctx.user_context or '(нет уточнений)',
         history=json.dumps([{**prompt_message(row), 'id':aliases[f'user:{row.id}']} for row in history], ensure_ascii=False),
