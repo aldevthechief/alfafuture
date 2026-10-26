@@ -2,6 +2,7 @@
 from dataclasses import asdict
 from datetime import date
 import json
+import re
 from math import isfinite
 from types import SimpleNamespace
 
@@ -10,6 +11,35 @@ from stage5_insight_detection.analyst_loop.compute import compute
 from stage5_insight_detection.analyst_loop.event import EventCard
 from stage5_insight_detection.analyst_loop.facts import Fact
 from stage5_insight_detection.bank_analytics.library import figures_of, freshness, stance_of
+
+
+def payment_flows(company_id: str) -> dict[str, Fact]:
+    """Known company flows by counterparty OKVED, across the available case sample (no assumed year).
+
+    Use all classified counterparties, not the truncated profile's top suppliers/buyers. Self transfers
+    and ambiguous company IDs are already removed by the shared case loader.
+    """
+    from common.data import load
+    try:
+        companies,payments,_,_=load()
+    except (OSError,ValueError,KeyError):
+        return {}
+    out={}
+    for side,me,other,who in (('out','PAYER','BENEFICIARY','поставщикам'),('in','BENEFICIARY','PAYER','от покупателей')):
+        flows=payments.loc[(payments[me]==company_id)&(payments[other]!=company_id),[other,'PAY_AMT']].copy()
+        flows['okved']=flows[other].map(companies['okved'])
+        for code,group in flows.dropna(subset=['okved']).groupby('okved'):
+            code=str(code).strip()
+            if not re.fullmatch(r'\d{2}(?:\.\d{1,2}){0,2}',code): continue
+            try: amounts=[float(value) for value in group.PAY_AMT]
+            except (TypeError,ValueError,OverflowError): continue
+            if not amounts or any(not isfinite(value) or value<0 for value in amounts): continue
+            amount=sum(amounts)
+            if not isfinite(amount) or amount<=0: continue
+            fid=f'fact:pay_{side}:{code}'
+            out[fid]=Fact(fid,f'Платежи {who} с ОКВЭД {code} за доступную выборку '
+                         '(видимые в Альфа-Банке; период не указан)',amount,'₽',source='df_Uid_payment_hack.csv; df_Uid_data_hack.csv')
+    return out
 
 
 class JudgeCalculations:
@@ -29,7 +59,7 @@ class JudgeCalculations:
                     if fid in rows:
                         self.selected[fid] = rows[fid]
 
-    def _profile(self) -> dict[str, Fact]:
+    def _profile(self, with_payments=False) -> dict[str, Fact]:
         if self.company is None:
             if not self.company_id:
                 return {}
@@ -43,6 +73,9 @@ class JudgeCalculations:
                     # Keep exact rubles for arithmetic; do not round to billions before calculating a share.
                     self.company[f'fact:{name}'] = Fact(f'fact:{name}', label, value, '₽',
                                                         source=f'stage2_company_facts.profile.card.{name}')
+        if with_payments and not getattr(self,'_payments_loaded',False):
+            self.company |= payment_flows(self.company_id)
+            self._payments_loaded=True
         return self.company
 
     def _bank(self) -> list:
@@ -57,7 +90,7 @@ class JudgeCalculations:
             if figures is None:
                 figures = [asdict(x) for x in figures_of(f['text'])] if f['kind'] == 'text' else []
             out.append(SimpleNamespace(fragment=SimpleNamespace(
-                id=f['id'], date=f.get('date'), stale=fresh in ('stale', 'unknown') or f.get('unverified', False),
+                id=f['id'], date=f.get('date'), stale=fresh in ('stale', 'unknown') or bool(f.get('superseded_by')) or f.get('unverified', False),
                 figures=figures)))
         return out
 
@@ -66,8 +99,9 @@ class JudgeCalculations:
         if key in self.replies:
             return self.replies[key]
         try:
-            needs_company = any(word in key for word in ('доля', 'долю', 'выручк'))
-            company = self._profile() if needs_company else {}
+            payment = any(word in key for word in ('платеж','платёж'))
+            needs_company = payment or any(word in key for word in ('доля', 'долю', 'выручк'))
+            company = self._profile(with_payments=payment) if needs_company else {}
             context = SimpleNamespace(event=EventCard.from_news(self.news),
                                       profile=SimpleNamespace(facts=company), bank=self._bank())
             results, why = compute(query, context, self.round + 1)
@@ -78,16 +112,18 @@ class JudgeCalculations:
 
             refs = {part.strip() for f in results for part in f.source.split(';')}
             needed = [f for f in company.values() if any(f.id in r.formula or f.id in r.source for r in results)]
-            for f in [*needed, *results]:
+            facts=list({f.id:f for f in [*needed,*results]}.values())
+            for f in facts:
                 self.facts[f.id] = f.dict()
             for ref in refs & self.selected.keys():
                 f = self.selected[ref]
                 when = date.fromisoformat(f['date']) if f.get('date') else None
                 fresh, _ = freshness(when, date.today())
+                if f.get('superseded_by'): fresh='stale'
                 self.bank_sources[ref] = dict(f, stale=fresh in ('stale', 'unknown'), freshness=fresh,
                                               own_view=f.get('own_view', stance_of(f['text'])[0]))
             self.round += 1
-            reply = json.dumps({'ok': True, 'facts': [f.dict() for f in [*needed, *results]],
+            reply = json.dumps({'ok': True, 'facts': [f.dict() for f in facts],
                                 'note': 'kind=hypothesis — сценарий или непроверенное число, не установленный эффект компании'},
                                ensure_ascii=False, allow_nan=False)
             self.replies[key] = reply

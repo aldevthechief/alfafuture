@@ -1,4 +1,5 @@
 import React, { useRef, useState } from 'react';
+import { InsightAssessment } from './insightAssessment.jsx';
 import { InsightIcon } from './insightIcons.jsx';
 import { view } from './insightView.js';
 import { ExcerptAction, useExcerptSelection } from './excerptSelection.jsx';
@@ -33,6 +34,7 @@ export function InsightReader({ insight, compact, onQuote, onClose, canAsk, chil
     <div className="insight-reader-scroll" tabIndex={0} aria-label="Материалы инсайта" onScroll={clearSelection}>
       <div className="insight-reader-copy" ref={content}>
         <h3>{v.title}</h3>
+        <InsightAssessment insight={insight} />
         {compact && !full && v.lead && <p className="insight-reader-lead">{v.lead}</p>}
         <ReaderBlock title="Что произошло" items={v.facts} />
         <ReaderBlock title="Почему это важно" items={v.why} />
@@ -42,7 +44,8 @@ export function InsightReader({ insight, compact, onQuote, onClose, canAsk, chil
         <ReaderBlock title="Что сделать" items={v.actions} ordered />
         <ReaderBlock title="Позиция Банка" items={v.bank_view} />
         {(!compact || full) && insight.ai_conclusion && <section className="insight-reader-section"><h4>Итог AI</h4><p>{insight.ai_conclusion}</p></section>}
-        {insight.bank_product && <section className="insight-reader-section"><h4>Чем может помочь Банк</h4><p>{insight.bank_product}</p></section>}
+        {insight.bank_product && <section className="insight-reader-section"><h4>Чем может помочь Банк</h4><p>{insight.bank_product}</p>
+          {insight.bank_product_reason && <p className="bank-product-reason">Почему это предложено: {insight.bank_product_reason}</p>}</section>}
       </div>
     </div>
     {children && <div className="insight-reader-materials">{children}</div>}

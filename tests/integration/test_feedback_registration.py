@@ -21,6 +21,38 @@ def result():
 
 
 class RegistrationTests(unittest.TestCase):
+    def test_reassessment_keeps_discussion_and_original_evidence_across_restart(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store=Store(Path(tmp)/'feedback.sqlite3')
+            headers={'X-User-ID':'alice'}
+            body={'company_id':'U_1','results':[result()],'registration_key':'job-1:insight-41'}
+            with TestClient(create_app(store=store,api_token='')) as client:
+                original=client.post('/v1/insights/import',json=body,headers=headers).json()[0]
+                response=client.post(f'/v1/insights/{original["id"]}/feedback',headers=headers,
+                                     json={'kind':'like','request_id':'like-before-reassessment'})
+                self.assertEqual(response.status_code,201)
+            changed=copy.deepcopy(body)
+            changed['results'][0]['insight'].update(confidence='high',bank_product='Обсудить фиксацию ставки')
+            with TestClient(create_app(store=Store(store.path),api_token='')) as client:
+                response=client.post('/v1/insights/import',json=changed,headers=headers)
+                self.assertEqual(response.status_code,201,response.text)
+                updated=response.json()[0]
+                self.assertEqual(updated['id'],original['id'])
+                self.assertEqual(updated['evidence'],original['evidence'])
+                self.assertEqual(updated['created_at'],original['created_at'])
+                self.assertEqual(updated['insight']['confidence'],'high')
+                self.assertEqual(updated['insight']['bank_product'],'Обсудить фиксацию ставки')
+                history=client.get(f'/v1/insights/{updated["id"]}/feedback',headers=headers).json()
+                self.assertEqual([item['request_id'] for item in history],['like-before-reassessment'])
+                for field in ('title','evidence'):
+                    collision=copy.deepcopy(changed)
+                    if field=='title': collision['results'][0]['insight']['title']='Другой инсайт'
+                    else: collision['results'][0]['evidence']['news'][0]['text']='Другой источник'
+                    rejected=client.post('/v1/insights/import',json=collision,headers=headers)
+                    self.assertEqual(rejected.status_code,409,rejected.text)
+                stored=client.get(f'/v1/insights/{updated["id"]}',headers=headers).json()
+                self.assertEqual(stored,updated)
+
     def test_legacy_display_role_uses_same_identity_and_original_evidence(self):
         original = result()
         original['insight']['role'] = 'Финансовый директор (CFO)'

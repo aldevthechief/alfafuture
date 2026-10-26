@@ -2,11 +2,13 @@
 the company's facts from the case tables, the event's figures and the bank's figures that are printed in its text or
 confirmed on a chart (a value measured off a chart, «≈», or read by the model alone is never used).
 
-Four calculations, chosen by the words of the request:
+Five calculations, chosen by the words of the request:
 - change: the event's figure against the bank's for the same indicator and unit, in п.п. (or %) and relative %;
 - share: the company's revenue in its group's revenue;
 - forecast on revenue: the bank's forecast (%) applied to the company's revenue, a hypothesis with its assumption;
-- units: a number of the request converted between трлн / млрд / млн / тыс. ₽ or between п.п. and б.п.
+- units: a number of the request converted between трлн / млрд / млн / тыс. ₽ or between п.п. and б.п.;
+- payment flow: a price change applied to matching supplier/buyer payments in the available sample,
+  with an explicit pass-through assumption; these payments are not the company's costs or annual flows.
 Anything else, or no checked numbers for it, is answered with the reason, so no request stays open without one.
 """
 import re
@@ -18,7 +20,13 @@ from stage5_insight_detection.bank_analytics.library import numeric, topics_of
 MONEY = {'трлн': 1e12, 'млрд': 1e9, 'млн': 1e6, 'тыс': 1e3}
 NUMBER = re.compile(r'([-+−]?(?:\d{1,3}(?:[ \u00a0\u202f]\d{3})+|\d+)(?:[.,]\d+)?)\s*'
                     r'(трлн|млрд|млн|тыс|п\.\s?п\.|пп|б\.\s?п\.|бп|%)?', re.I)
-SUPPORTED = 'изменение показателя к позиции Банка, доля выручки в группе, прогноз Банка на выручку, перевод единиц'
+SUPPORTED = ('изменение показателя к позиции Банка, доля выручки в группе, прогноз Банка на выручку, перевод единиц, '
+             'изменение цен на платежи поставщикам или от покупателей')
+FLOW = {'топлив': ('46.71', '47.30', '19.2'), 'бензин': ('46.71', '47.30', '19.2'), 'дизел': ('46.71', '47.30', '19.2'),
+        'нефтепрод': ('46.71', '19.2'), 'металл': ('24', '46.72', '25'), 'стройматериал': ('23', '46.73'),
+        'перевоз': ('49', '52', '53'), 'логистик': ('49', '52', '53'), 'электроэнерг': ('35',), 'тариф': ('35', '36', '37'),
+        'продукт': ('10', '46.3'), 'лекарств': ('21', '46.46'), 'аренд': ('68',), 'ремонт': ('33', '45.2')}
+PCT = re.compile(r'(?<![\d.,])([-+−]?(?:\d{1,3}(?:[ \u00a0\u202f]\d{3})+|\d+)(?:[.,]\d+)?)\s*%')
 
 
 def checked_bank(d) -> list[tuple[str, dict]]:
@@ -141,11 +149,59 @@ def units(query: str, n: int) -> tuple[list[Fact], str]:
                  f'{value:g} {src} → {dst}', 'число из запроса, не подтверждено таблицами', kind='hypothesis')], ''
 
 
+def flow_scenario(query: str, d, n: int) -> tuple[list[Fact], str]:
+    """Signed price change × known matching flows; an assumption, with no invented period."""
+    q = query.lower().replace('ё','е')
+    changes = list(PCT.finditer(q))
+    if not changes: return [], 'в запросе нет изменения цены в %'
+    if len(changes)!=1: return [], 'укажите одно изменение цены в % за вызов'
+    match = changes[0]
+    pct = numeric(match.group(1).replace('−','-'))
+    if not isfinite(pct): return [], 'изменение цены не является конечным числом'
+    decrease = bool(re.search(r'снижен|сниз|паден|упа[дл]|сокращ|уменьш|подешев|удешев',q))
+    if decrease:
+        if match.group(1).startswith('+'): return [], 'знак процента противоречит снижению цены'
+        pct = -abs(pct)
+    elif pct<0 and re.search(r'рост|увелич|подорож',q):
+        return [], 'знак процента противоречит росту цены'
+    if pct < -100: return [], 'цена не может снизиться больше чем на 100%'
+    incoming = bool(re.search(r'покупател|входящ|от клиент',q))
+    outgoing = bool(re.search(r'поставщик|исходящ',q))
+    if incoming and outgoing: return [], 'укажите одно направление платежей за вызов'
+    side = 'in' if incoming else 'out'
+    # Explicit dotted OKVED codes or a two-digit division after «ОКВЭД», never a year or an unrelated count.
+    codes = re.findall(r'(?<![\d.])\b\d{2}(?:\.\d{1,2}){1,2}\b(?![\d.])',q)
+    codes += re.findall(r'оквэд\s*[:=]?\s*(\d{2})\b(?!\.)',q)
+    named=[word for word in FLOW if word in (re.sub(r'нефтепродукт\w*','',q) if word=='продукт' else q) and word!='тариф']
+    if not named and 'тариф' in q: named=['тариф']
+    prefixes = tuple(dict.fromkeys(codes)) or tuple(dict.fromkeys(p for word in named for p in FLOW[word]))
+    if not prefixes: return [], 'в запросе нет вида контрагентов (топливо, металл, перевозки … или код ОКВЭД)'
+    flows = [f for fid,f in d.profile.facts.items() if fid.startswith(f'fact:pay_{side}:') and
+             fid.split(':',2)[2].startswith(prefixes)]
+    if not flows: return [], f'в платёжных данных нет {"покупателей" if side=="in" else "поставщиков"} с ОКВЭД {", ".join(prefixes)}'
+    if any(not isinstance(f.value,(int,float)) or isinstance(f.value,bool) or not isfinite(f.value) or f.value<0 or f.unit!='₽' for f in flows):
+        return [], 'некорректная сумма или единица платежей; расчёт не выполнен'
+    total = sum(f.value for f in flows)
+    amount = total*pct/100
+    if not isfinite(total) or not isfinite(amount): return [], 'результат не является конечным числом'
+    value,unit = money_value(amount)
+    base,base_unit = money_value(total)
+    found = sorted({f.id.split(':',2)[2] for f in flows})
+    who = 'платежи от покупателей' if side=='in' else 'платежи поставщикам'
+    return [*flows,Fact(f'fact:calc_{n}_flow',f'Если цены изменятся на {pct:g}%: {who} с ОКВЭД {", ".join(found)} '
+        f'(видимые в Альфа-Банке, {base:g} {base_unit} за доступную выборку; период не указан) изменятся на',value,unit,
+        f'({" + ".join(f.id for f in flows)}) × {pct:g}%; расчёт только по видимой части платежей компании; '
+        'допущение: изменение цены переносится на платежи один к одному при неизменном объёме; это не затраты компании',
+        '; '.join(f.id for f in flows),kind='hypothesis')], ''
+
+
 def compute(query: str, d, n: int = 1) -> tuple[list[Fact], str]:
     """Facts for the request, or none and the reason."""
     q = query.lower()
     topics = topics_of(query) or list(d.event.topics)
-    if re.search(r'перев\w*|\bв\s+(трлн|млрд|млн|тыс|б\.\s?п|бп|п\.\s?п|пп)\b', q):
+    if re.search(r'платеж|платёж',q):
+        return flow_scenario(query,d,n)
+    if re.search(r'\bперев(ед|ест|од)\w*|\bв\s+(трлн|млрд|млн|тыс|б\.\s?п|бп|п\.\s?п|пп)\b', q):
         return units(query, n)
     if 'доля' in q or 'долю' in q:
         return share(d, n)

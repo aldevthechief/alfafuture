@@ -23,7 +23,7 @@ python -X utf8 stage5_insight_detection/bank_analytics/library.py [--ocr] [--reb
 python -X utf8 stage5_insight_detection/bank_analytics/library.py --search "ключевая ставка прогноз"
 """
 import argparse, calendar, hashlib, json, re, sys
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import date
 from pathlib import Path
 
@@ -133,6 +133,7 @@ class Fragment:
     age_days: int | None = None
     kind: str = 'text'  # text | chart | table
     unverified: bool = False  # holds chart values read off the scale
+    superseded_by: str | None = None
 
     def caption(self) -> str:
         """Title of the fragment in prompts and on the card."""
@@ -621,9 +622,16 @@ class BankLibrary:
     """All fragments + a stem TF-IDF index. `refresh()` parses only new or changed PDFs of the folder."""
 
     def __init__(self, fragments: list[Fragment]):
-        self.fragments = fragments
-        self.by_id = {f.id: f for f in fragments}
-        self.index = StemIndex([f'{f.heading}. {f.text}' for f in fragments], min_df=1, max_df=1.0) if fragments else None
+        from stage5_insight_detection.bank_analytics.supersede import superseded
+        changed=superseded([asdict(f) for f in fragments])
+        # Shared per-report caches and already running analyses keep their original immutable view.
+        def current_freshness(f):
+            if not f.superseded_by: return f.freshness
+            return 'unknown' if f.age_days is None else 'fresh' if f.age_days<=60 else 'aging' if f.age_days<=365 else 'stale'
+        self.fragments=[replace(f,superseded_by=changed.get(f.id),
+                        freshness='stale' if f.id in changed else current_freshness(f)) for f in fragments]
+        self.by_id = {f.id: f for f in self.fragments}
+        self.index = StemIndex([f'{f.heading}. {f.text}' for f in self.fragments], min_df=1, max_df=1.0) if fragments else None
 
     @classmethod
     def from_pages(cls, reports: dict[str, list[str]], as_of: date, meta: list[dict] = REPORTS) -> 'BankLibrary':

@@ -8,16 +8,26 @@ import { renderToStaticMarkup } from 'react-dom/server';
 
 const require = createRequire(import.meta.url);
 const result = await build({
-  stdin: { contents: "export { HistoryMessages } from './src/discussion.jsx';", resolveDir: fileURLToPath(new URL('..', import.meta.url)) },
+  stdin: { contents: "export { HistoryMessages, errorText } from './src/discussion.jsx'; export { ApiError } from './src/api.js';", resolveDir: fileURLToPath(new URL('..', import.meta.url)) },
   bundle: true, write: false, format: 'cjs', platform: 'node', external: ['react', 'react-dom'], loader: { '.css': 'empty' },
   define: { 'import.meta.env': '{}' },
 });
 const module = { exports: {} };
 new Function('require', 'module', 'exports', result.outputFiles[0].text)(require, module, module.exports);
-const { HistoryMessages } = module.exports;
+const { HistoryMessages, errorText, ApiError } = module.exports;
 const render = history => renderToStaticMarkup(React.createElement(HistoryMessages, {
   history, record: {}, insight: { sources: { 'news:1': { title: 'Исходная новость', snippet: 'Исходная цитата' } } }, busy: false, onAsk: () => {},
 }));
+
+test('discussion errors explain the recovery without exposing internal server diagnostics',()=>{
+  for (const status of [409,500]) {
+    const message=errorText(new ApiError(status,'registration_key already belongs to a different insight'));
+    assert.ok(!message.includes('registration_key'));
+    assert.match(message,/Попробуйте/);
+  }
+  assert.match(errorText(new ApiError(502,'upstream failure')),/Сообщение сохранено/);
+  assert.match(errorText(new ApiError(503,'missing configuration')),/Сообщение сохранено/);
+});
 
 test('the conversation keeps user questions, full answers and citations while reactions stay out of the transcript', () => {
   const html = render([

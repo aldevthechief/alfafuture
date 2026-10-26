@@ -1,0 +1,5 @@
+.insight-assessment{margin:12px 0 18px;padding:14px 16px;border:1px solid var(--line);border-radius:12px;color:var(--text-2);font-size:13px;line-height:1.5}
+.insight-assessment summary{font-weight:600;cursor:pointer;color:var(--text)}
+.insight-assessment ul{padding-left:20px;margin:12px 0 8px;display:grid;gap:6px}
+.insight-assessment p{margin:10px 0 0}.insight-assessment .assessment-note{font-size:12px;color:var(--text-3)}
+.bank-product-reason{display:block;margin-top:8px;font-size:13px;color:var(--text-2);line-height:1.5}

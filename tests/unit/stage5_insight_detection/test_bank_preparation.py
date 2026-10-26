@@ -201,6 +201,7 @@ class FlagTests(unittest.TestCase):
             def __init__(self,*args,**kwargs): pass
             def refresh(self): pass
             def event_plausibility(self,news_id): return 1.0
+            def same_event(self,news_id): return NEWS.iloc[:0]
         for flags,enabled in variants:
             with self.subTest(flags=flags), TemporaryDirectory() as tmp, ExitStack() as stack:
                 report=dict(status='complete',stages=[])

@@ -84,7 +84,9 @@ class JudgeTools:
 
     def compute(self, query: str) -> str:
         """Calculate with Python: revenue share in the group, difference between a news indicator and the Bank's,
-        a scenario revenue × forecast (%), or unit conversion. For bank figures first use search_bank_analytics.
+        a scenario revenue × forecast (%), unit conversion, or a price change on known payments:
+        «рост цен на топливо на 10% на платежи поставщикам». Payments cover the available sample,
+        not annual costs; pass-through and unchanged volume are assumptions. For bank figures first use search_bank_analytics.
         Returns formula, sources and assumptions, or the reason it cannot calculate. No model or search is called."""
         if not self.calculations.news:
             self.calculations.news = dict(self.related.get(self.news_id))

@@ -10,6 +10,13 @@ RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
     python -m pip install torch==2.6.0+cpu --index-url https://download.pytorch.org/whl/cpu
 RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
     python -m pip install -r requirements.txt
+# PyMuPDF includes the OCR engine, but its rus/eng language files must be installed separately.
+# Ship them in the image so PDF preparation never downloads dependencies during inference.
+RUN apt-get update && apt-get install -y --no-install-recommends tesseract-ocr-eng tesseract-ocr-rus \
+    && mkdir -p /opt/tessdata \
+    && cp /usr/share/tesseract-ocr/*/tessdata/eng.traineddata /usr/share/tesseract-ocr/*/tessdata/rus.traineddata /opt/tessdata/ \
+    && rm -rf /var/lib/apt/lists/*
+ENV TESSDATA_PREFIX=/opt/tessdata
 COPY . .
 # API services override this command; a one-off CLI container shows usage by default.
 CMD ["python", "-X", "utf8", "pipeline.py", "--help"]

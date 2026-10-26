@@ -1,4 +1,6 @@
 const CONFIDENCE = { high: ['green', 'Надёжно', 'Уверенность высокая'], medium: ['orange', 'Вероятно', 'Уверенность средняя'], low: ['grey', 'Гипотеза', 'Уверенность низкая'] };
+export const confidenceDescription=insight=>[CONFIDENCE[insight.confidence]?.[2] || CONFIDENCE.low[2],
+  ...(insight.confidence_basis || [])].join('\n');
 const dateFormatter = new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'long' });
 const day = value => {
   const date = value && new Date(value);

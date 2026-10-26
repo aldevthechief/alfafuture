@@ -119,8 +119,18 @@ class Store:
                         record.model_dump_json(), record.created_at))
             existing = InsightRecord.model_validate_json(db.execute(
                 'SELECT document FROM insights WHERE id=?', (record.id,)).fetchone()['document'])
-            if (existing.user_id != user_id or existing.news_id != news_id or existing.insight != body.insight):
+            # Recomputed confidence and product suggestions do not create a new discussion.
+            # Compare the actual claims and frozen sources before updating those display fields.
+            assessment_fields={'confidence','bank_product'}
+            same_insight=existing.insight.model_dump(exclude=assessment_fields)==body.insight.model_dump(exclude=assessment_fields)
+            old_evidence=existing.evidence.model_dump(exclude={'captured_at'}) if existing.evidence else None
+            new_evidence=record.evidence.model_dump(exclude={'captured_at'}) if record.evidence else None
+            if (existing.user_id != user_id or existing.company_id != body.company_id or existing.news_id != news_id
+                    or not same_insight or old_evidence != new_evidence or existing.card_sources != record.card_sources):
                 raise Conflict('registration_key already belongs to a different insight')
+            if existing.insight != body.insight:
+                existing=existing.model_copy(update={'insight':body.insight})
+                db.execute('UPDATE insights SET document=? WHERE id=?', (existing.model_dump_json(),existing.id))
         return existing
 
     def insight(self, user_id: str, insight_id: str) -> InsightRecord:

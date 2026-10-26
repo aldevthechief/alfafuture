@@ -154,10 +154,13 @@ def passages(chunks: list[dict], segments: dict, hits: list[int], context: int =
                 if t: pieces.append(f'>>> найдено >>>\n{t}\n<<<' if is_hit else t)
             j = k + 1
         span = [chunks[x] for x in range(lo, hi + 1)]
+        superseded=sorted({c['superseded_by'] for c in span if c.get('superseded_by')})
         out.append({'report': chunks[lo]['report'], 'date': chunks[lo]['date'], 'stale': chunks[lo]['stale'],
                     'freshness': chunks[lo]['freshness'],
                     'own_view': any(chunks[i]['own_view'] for i in hit),
                     'pages': sorted({p for x in span for p in x['pages']}), 'ids': [chunks[i]['id'] for i in sorted(hit)],
                     'context_ids': [c['id'] for c in span],
                     'text': '\n\n'.join(pieces)})
+        if superseded:
+            out[-1].update(stale=True,freshness='stale',superseded_by='; '.join(superseded))
     return out

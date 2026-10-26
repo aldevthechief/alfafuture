@@ -10,7 +10,8 @@ const require = createRequire(import.meta.url);
 async function variant(mode) {
   const result = await build({
     stdin: { contents:`export { default as Entry } from './src/accountChooser.jsx';
-      export * from './src/cabinetMode.js'; export { startAnalysis } from './src/api.js';`,
+      export * from './src/cabinetMode.js'; export { startAnalysis, uploadReport } from './src/api.js';
+      export { default as DocumentsPage } from './src/documents.jsx';`,
       resolveDir:fileURLToPath(new URL('..', import.meta.url)) },
     bundle:true, write:false, format:'esm', platform:'node', loader:{'.css':'empty'},
     define:{'import.meta.env':JSON.stringify({VITE_CABINET_MODE:mode})},
@@ -33,6 +34,10 @@ test('server build renders only prepared entry and rejects inference before any 
   const fetch = t.mock.fn();
   t.mock.method(globalThis, 'fetch', fetch);
   await assert.rejects(server.startAnalysis('U_14366', 'cfo'), /только готовые кабинеты/);
+  await assert.rejects(server.uploadReport({name:'test.pdf'}),/полной версии/);
+  const documents=renderToStaticMarkup(React.createElement(server.DocumentsPage,{name:'Компания'}));
+  assert.match(documents,/Загрузка PDF доступна в полной версии/);
+  assert.ok(!documents.includes('id="documents-jobs-title"'));
   assert.equal(fetch.mock.calls.length, 0);
 });
 

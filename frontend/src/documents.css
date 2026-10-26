@@ -25,5 +25,12 @@
 .documents-footer{display:flex;justify-content:space-between;align-items:center;gap:24px;border-top:1px solid var(--line);padding-top:22px;margin-top:26px}
 .documents-footer p{font-size:11px;line-height:1.8;color:var(--text-3);max-width:560px}.documents-footer .btn{white-space:nowrap;height:40px;font-size:12px}.documents-footer .btn:disabled{opacity:.4;cursor:default}
 .documents-help{display:flex;gap:12px;align-items:baseline;font-size:12px;line-height:1.8;color:var(--text-3);padding:20px 4px}.documents-help>span{color:var(--red);font-size:18px}.documents-help button{color:var(--blue)}
+.documents-file-error{font-size:12px;line-height:1.6;color:var(--signal-negative);margin-top:8px;overflow-wrap:anywhere}
+.documents-jobs{margin-top:20px;padding:24px 28px}.documents-jobs h2{font-size:17px;font-weight:600}.documents-empty{font-size:12px;line-height:1.7;color:var(--text-3)}
+.documents-jobs ul{list-style:none;margin:0;padding:0}.documents-jobs li{display:flex;align-items:flex-start;gap:12px;padding:16px 0;border-bottom:1px solid var(--line)}.documents-jobs li:last-child{border:0}
+.documents-jobs li>div{flex:1;min-width:0}.documents-jobs strong{font-size:12px;overflow-wrap:anywhere}.documents-jobs small{display:block;font-size:11px;line-height:1.7;color:var(--text-3)}.documents-jobs time{font-size:10px;line-height:1.6;color:var(--text-3);white-space:nowrap}
+.documents-job-status{font-size:12px;line-height:1.7;margin-top:5px}.documents-job-dot{width:8px;height:8px;border-radius:50%;margin-top:5px;flex-shrink:0;background:currentColor}
+.documents-job-success{color:var(--signal-positive)}.documents-job-error{color:var(--signal-negative)}.documents-job-pending{color:var(--blue)}.documents-job-muted{color:var(--text-3)}
+.documents-page button:disabled{opacity:.45;cursor:default}
 @media(max-width:700px){.documents-import{padding:20px}.documents-import h2{font-size:22px}.documents-footer{flex-direction:column;align-items:flex-start;gap:16px}.documents-drop{padding:26px 16px}}
 @media(prefers-reduced-motion:reduce){.documents-drop{transition:none}}

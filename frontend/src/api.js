@@ -2,6 +2,7 @@
 // the widgets already read. VITE_API_URL sets the base, VITE_API_URL=off keeps the demo feed.json only.
 import { ALLOW_INFERENCE } from './cabinetMode.js';
 import { followUpdates } from './jobUpdates.js';
+import { MAX_PDF_BYTES } from './pdfSelection.js';
 const ENV = import.meta.env || {};
 const BASE = (ENV.VITE_API_URL ?? (ENV.DEV ? '.' : 'http://127.0.0.1:8000')).replace(/\/$/, '');
 export const USER_ID = ENV.VITE_USER_ID || 'demo-user';
@@ -24,6 +25,30 @@ export async function requestJson(base, path, init = {}) {
   return r.json();
 }
 const call = (path, init) => requestJson(BASE, path, init);
+
+export const REPORT_UPLOAD_ENABLED = API_ENABLED && ALLOW_INFERENCE;
+export async function uploadReport(file) {
+  if (!REPORT_UPLOAD_ENABLED) throw new Error('Загрузка PDF доступна в полной версии приложения.');
+  if (file.size>MAX_PDF_BYTES) throw new ApiError(413,'Файл превышает допустимый размер 50 МБ.');
+  const form=new FormData();
+  form.append('files',file,file.name);
+  form.append('options',JSON.stringify({chart_mode:'selective'}));
+  // The browser supplies the multipart boundary; a JSON Content-Type would break uploads.
+  const response=await fetch(`${BASE}/v1/reports/upload`,{method:'POST',headers:{'X-User-ID':USER_ID},body:form});
+  if (!response.ok) {
+    throw new ApiError(response.status,response.status===413 ? 'Сервер ограничил размер загрузки. Сам файл укладывается в лимит 50 МБ. Попробуйте позже.'
+      : response.status===422 ? 'Сервер не смог прочитать PDF. Проверьте, что файл открывается и не защищён паролем.'
+        : response.status===403 ? 'Загрузка PDF недоступна в этой версии приложения.'
+          : response.status===429 ? 'Очередь обработки заполнена. Попробуйте позже.'
+            : 'Не удалось отправить PDF. Попробуйте ещё раз.');
+  }
+  const data=await response.json();
+  if (data.queue_full && !data.jobs?.length) throw new ApiError(429,'Очередь обработки заполнена. Попробуйте позже.');
+  if (data.jobs?.length!==1 || !data.jobs[0].id) throw new Error('Сервер не подтвердил приём PDF. Проверьте список обработок перед повторной отправкой.');
+  return data.jobs[0];
+}
+export const reportJobs = signal => call('/v1/jobs?include_results=false',{signal}).then(data=>data.reports || []);
+export const reportJob = (id,signal) => call(`/v1/jobs/${encodeURIComponent(id)}`,{signal});
 
 export async function fetchExport(kind, params, signal) {
   if (!API_ENABLED) throw new Error('Для выгрузки подключите API кабинета.');
@@ -183,6 +208,8 @@ export function toFeed(job, companyFacts = []) {
       ...Object.fromEntries(BLOCKS.map(k => [k, claims(i[k])])),
       actions: i.actions || [], ai_conclusion: i.ai_conclusion || '',
       confidence: i.confidence || 'medium', bank_product: i.bank_product || '',
+      confidence_basis:r.business_value?.confidence_basis || [], credibility:r.credibility || null,
+      bank_product_reason:r.business_value?.bank_product?.why || '',
       impact_level: i.impact?.level ?? null,
       not_bank_position: i.not_bank_position, warnings: i.review?.warnings || [],
       trace: i.trace || [],

@@ -8,7 +8,8 @@ import { Typography } from '@alfalab/core-components/typography';
 import { InsightDiscussion } from './discussion.jsx';
 import { loadInsight } from './api.js';
 
-import { CONFIDENCE, day, view } from './insightView.js';
+import { CONFIDENCE, confidenceDescription, day, view } from './insightView.js';
+import { InsightAssessment } from './insightAssessment.jsx';
 import { insightSignal } from './insightSignal.js';
 import { SignalBadge } from './insightSignal.jsx';
 import { InsightIcon } from './insightIcons.jsx';
@@ -128,7 +129,7 @@ function InsightDetails({ id, insight: i, compact, sources, company, onHide }) {
   };
   const [feedbackTarget, setFeedbackTarget] = useState(null);
   const v = useMemo(() => view(i, compact), [i, compact]);
-  const [color, conf, confTitle] = CONFIDENCE[i.confidence] || CONFIDENCE.low;
+  const [color, conf] = CONFIDENCE[i.confidence] || CONFIDENCE.low;
   const used = useMemo(() => [...new Set([...v.facts, ...v.why, ...v.risks, ...v.opportunities, ...v.bank_view, ...(i.hypotheses || [])].flatMap(x => x.sources || []))], [v, i]);
 
   return <>
@@ -139,9 +140,10 @@ function InsightDetails({ id, insight: i, compact, sources, company, onHide }) {
         <div className={`iwin insight-detail-tone-${insightSignal(i).tone}`}>
           <div className="ic-tags">
             <SignalBadge insight={i} />
-            <span title={confTitle}><Status color={color} size={20}>{conf}</Status></span>
+            <span title={confidenceDescription(i)}><Status color={color} size={20}>{conf}</Status></span>
             {i.bank_view.length > 0 && <Status color="purple" size={20}>Позиция Банка</Status>}
           </div>
+          <InsightAssessment insight={i} />
           <Typography.Text view="primary-large" color="secondary" tag="p">{v.lead}</Typography.Text>
           <div className="iwin-grid">
             <InsightBody insight={i} v={v} compact={compact} sources={sources} company={company} />
@@ -215,7 +217,8 @@ const InsightBody = memo(function InsightBody({ insight: i, v, compact, sources,
               ? <Section kind="bank" label="Позиция Банка"><ul>{v.bank_view.map((x, n) => <li key={n}>{x.text}</li>)}</ul></Section>
               : <Plate view="attention" title="Аналитики Банка по этой теме нет">Вывод не является официальной позицией Банка.</Plate>}
             {!compact && i.ai_conclusion && <Section kind="ai" label="Итог AI"><p>{i.ai_conclusion}</p></Section>}
-            {i.bank_product && <Plate view="common" title="Чем может помочь Банк">{i.bank_product}</Plate>}
+            {i.bank_product && <Plate view="common" title="Чем может помочь Банк">{i.bank_product}
+              {i.bank_product_reason && <span className="bank-product-reason">Почему это предложено: {i.bank_product_reason}</span>}</Plate>}
             {i.trace?.length > 0 && <details className="trace">
               <summary>Как мы пришли к выводу</summary>
               <ol>{i.trace.map((step, n) => <li key={n}>{step.text}</li>)}</ol>

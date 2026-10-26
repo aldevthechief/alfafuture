@@ -22,10 +22,11 @@ const SUGGEST = [
 const LABELS = { like:'Полезно', useful:'Полезно', dislike:'Не полезно', not_relevant:'Не про нас',
   already_known:'Уже знали', incorrect:'Ошибка в фактах', emoji:'Реакция' };
 const merge = (items, added) => [...new Map([...items, ...added].map(item => [item.id, item])).values()];
-const errorText = error => error instanceof ApiError
+export const errorText = error => error instanceof ApiError
   ? error.status === 503 ? 'Ассистент не настроен. Сообщение сохранено — ответ можно запросить повторно.'
     : error.status === 502 ? 'Ответ пока недоступен. Сообщение сохранено — попробуйте ещё раз.'
-      : `Сервис обсуждения: ${error.message}`
+      : error.status === 409 ? 'Не удалось связать обсуждение с карточкой. Попробуйте открыть инсайт заново.'
+        : 'Не удалось загрузить обсуждение. Попробуйте ещё раз.'
   : error.message === 'Failed to fetch' ? 'Не удалось связаться с сервисом обсуждения. Попробуйте ещё раз.' : error.message;
 
 function messageSources(record, item, insight, history) {

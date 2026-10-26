@@ -10,8 +10,14 @@ def metadata(job):
 def rows_of(job):
     result = job.get('result')
     if isinstance(result, dict) and 'results' in result:
-        return result['results'] or []
-    return job.get('partial_results') or []
+        rows=result['results'] or []
+    else:
+        rows=job.get('partial_results') or []
+    company=(job.get('request') or {}).get('company_id') or (result.get('company_id') if isinstance(result,dict) else None)
+    if not company: return rows
+    from stage6_insight_generation.business_value import enrich
+    # A presentation copy: committed demo caches, frozen claims/evidence and saved LLM responses stay intact.
+    return [enrich(row,company) if row.get('status')=='ready' else row for row in rows]
 
 
 def preview_feed(job):
@@ -32,6 +38,8 @@ def preview_feed(job):
             published=insight.get('event_date') or news.get('date') or job.get('finished_at'),
             channel=insight.get('channel') or ('Аналитика Банка' if bank else 'Новости'),
             confidence=insight.get('confidence') or 'medium',
+            confidence_basis=(row.get('business_value') or {}).get('confidence_basis',[]),
+            credibility=row.get('credibility'),
             impact_level=(insight.get('impact') or {}).get('level'),
             counts={key: len(insight.get(key) or []) for key in ('risks', 'opportunities', 'actions', 'bank_view')},
         ))

@@ -123,6 +123,8 @@ class BankAnalytics:
                                                   overlap_tokens, keep)
         if not self.chunks:
             raise FileNotFoundError(f'no OCR output in {ocr_dir}; run stage5_insight_detection/bank_analytics/ocr.py first')
+        from stage5_insight_detection.bank_analytics.supersede import mark_chunks
+        self.superseded=mark_chunks(self.chunks,rows)
         have = {c['report'] for c in self.chunks}
         self.available = [f'{r["title"]} ({r["date"]})' for r in reports if r['title'] in have]
         self.missing = [f'{r["title"]} ({r["date"]})' for r in reports if r['title'] not in have]

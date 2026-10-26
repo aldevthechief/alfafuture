@@ -53,7 +53,12 @@ class InsightPreviewTests(unittest.TestCase):
     def test_opening_one_card_returns_only_its_original_result(self):
         response = self.client.get('/v1/jobs/job-1/insights/0', headers=self.headers)
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()['result']['results'], [self.row])
+        rows=response.json()['result']['results']
+        self.assertEqual(len(rows),1)
+        self.assertEqual(rows[0]['evidence'],self.row['evidence'])
+        self.assertEqual(rows[0]['insight']['id'],self.row['insight']['id'])
+        self.assertIn('business_value',rows[0])
+        self.assertNotIn('business_value',self.row)
         for index in (-1, 99):
             self.assertEqual(self.client.get(f'/v1/jobs/job-1/insights/{index}', headers=self.headers).status_code, 404)
 

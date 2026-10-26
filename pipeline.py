@@ -53,7 +53,9 @@ from stage5_insight_detection.bank_analytics.search import BankAnalytics
 from stage5_insight_detection.insight_dedup.dedup import DedupGate
 from stage5_insight_detection.insight_judge.judge import InsightJudge
 from stage5_insight_detection.news_enrichment.related_news import RelatedNews
-from stage6_insight_generation.insight_writer.insight_v2 import migrate_result
+from stage6_insight_generation.insight_writer.insight_v2 import migrate_result as migrate_v2
+from stage6_insight_generation.business_value import enrich
+from common.credibility import for_result
 from stage6_insight_generation.insight_writer.writer import Evidence, InsightWriter
 
 if TYPE_CHECKING:
@@ -86,6 +88,10 @@ def personalization_context(value: Personalization | None) -> str:
         return ''
     return render_untrusted('user_context', 'Со слов пользователя: не проверенные факты и не позиция Банка',
                             value.render(), body_limit=16000)
+
+
+def migrate_result(result: dict, company_id: str) -> dict:
+    return enrich(migrate_v2(result,company_id),company_id)
 
 
 class InsightPipeline:
@@ -187,6 +193,8 @@ class InsightPipeline:
         if 'event_id' in news:
             result['retrieval'] = {k: news[k] for k in ('event_id', 'event_news_ids', 'generators')}
         if isinstance(self.related, RelatedNews):
+            result['credibility']=for_result(news,self.related.same_event(news['id']).to_dict('records'),
+                                             self.related.event_plausibility(news['id']))
             result = bind_result(result, self.related.news, allow_unresolved=True)
         return result
 
@@ -494,7 +502,7 @@ def analytics_rows(run, error: str, news_results: list[dict], share: float, cach
         return []
     ready = [r for r in news_results if r.get('status') == 'ready' and r.get('insight')]
     insights = analytics_dedup(run.insights, ready, gate, role) if gate else run.insights
-    return result_rows(run, select(insights, len(ready), share))
+    return [enrich(row,run.company_id) for row in result_rows(run, select(insights, len(ready), share))]
 
 
 def analytics_dedup(insights: list, news_rows: list[dict], gate: DedupGate, role: str) -> list:

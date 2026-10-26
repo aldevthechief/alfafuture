@@ -16,8 +16,10 @@ from stage5_insight_detection.bank_analytics.search import BankAnalytics
 class BankView:
     def __init__(self,parts):
         self.parts=tuple(parts)
-        self.rows=[r for p in parts for r in p.rows]
-        self.chunks=[r for p in parts for r in p.chunks]
+        self.rows=[dict(r) for p in parts for r in p.rows]
+        self.chunks=[dict(r) for p in parts for r in p.chunks]
+        from stage5_insight_detection.bank_analytics.supersede import mark_chunks
+        self.superseded=mark_chunks(self.chunks,self.rows)
         self.index={r['id']:i for i,r in enumerate(self.chunks)}
         self.available=[r for p in parts for r in p.available]; self.missing=[]
         self.reports=[r for p in parts for r in getattr(p,'reports',[])]
@@ -29,13 +31,16 @@ class BankView:
         self.D=np.concatenate([p.D for p in parts if p.chunks],axis=0) if self.chunks else np.empty((0,0))
         self._lexical=None; self._lexical_lock=threading.Lock(); self.bm25=self._bm25
         self.segments={};self._context_chunks=[];self._report_titles={}
+        chunk_offset=0
         for n,part in enumerate(parts):
             self.segments.update({f'{n}:{key}':text for key,text in getattr(part,'segments',{}).items()})
-            for chunk in part.chunks:
+            for chunk in self.chunks[chunk_offset:chunk_offset+len(part.chunks)]:
                 title=f"{n}:{chunk['report']}"
                 self._report_titles[title]=chunk['report']
                 self._context_chunks.append(dict(chunk,report=title,
                     seg=f"{n}:{chunk['seg']}" if chunk.get('seg') is not None else None))
+
+            chunk_offset+=len(part.chunks)
 
     def _bm25(self,query):
         if self._lexical is None:

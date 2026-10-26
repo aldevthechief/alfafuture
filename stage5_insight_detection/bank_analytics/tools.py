@@ -52,6 +52,7 @@ class BankTools:
         for i, p in enumerate(passages, 1):
             pages = f"{p['pages'][0]}–{p['pages'][-1]}" if len(p['pages']) > 1 else str(p['pages'][0])
             old = ', STALE (старый отчёт)' if p['stale'] else ''
+            if p.get('superseded_by'): old=f', УСТАРЕЛ: прогноз заменён в {p["superseded_by"]}'
             # Windows already have a bounded number of token-sized chunks. Keep the whole window so the
             # judge and writer see the same material, including a forecast at the end of a neighbour.
             for cid in p.get('context_ids', p['ids']):
@@ -98,7 +99,8 @@ class BankTools:
         rows = [f for f in self.bank.rows if f['report'] == r['title'] and f['page'] == page]
         if not rows:
             return f"no parsed text on page {page} of «{r['title']}»"
-        return f"«{r['title']}», {r['date']}, стр. {page} (разобранный текст, возможны ошибки OCR):" + chr(10) * 2 + (chr(10) * 2).join(f['text'] for f in rows)
+        return f"«{r['title']}», {r['date']}, стр. {page} (разобранный текст, возможны ошибки OCR):" + chr(10) * 2 + (chr(10) * 2).join(
+            (f'УСТАРЕЛ: прогноз заменён в {f["superseded_by"]}\n' if f.get('superseded_by') else '')+f['text'] for f in rows)
 
     def look_at_page(self, report: str, page: int, question: str) -> str:
         """Look at the page picture of the PDF report and answer a question about it (a chart, a trend, a number the
@@ -128,5 +130,6 @@ class BankTools:
         for h in self.bank.search(topic, k=30):
             best.setdefault(h['report'], h)  # search returns the best hit of a report first
         rows = sorted(best.values(), key=lambda h: h['date'], reverse=True)
-        return (chr(10) * 2).join(f"«{h['report']}», {h['date']}, стр. {h['page']}{', STALE' if h['stale'] else ''}" + chr(10) + h['text'][:1500]
+        return (chr(10) * 2).join(f"«{h['report']}», {h['date']}, стр. {h['page']}{', STALE' if h['stale'] else ''}" +
+                                  (f' — прогноз заменён в {h["superseded_by"]}' if h.get('superseded_by') else '')+chr(10)+h['text'][:1500]
                                   for h in rows) or 'nothing found'
