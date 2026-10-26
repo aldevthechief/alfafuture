@@ -1,6 +1,7 @@
 import React, { useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { API_ENABLED, companyCounterparties, counterpartyDetails } from './api.js';
+import { ExportControl } from './exportControl.jsx';
 import './paymentAnalytics.css';
 import './counterparties.css';
 
@@ -110,7 +111,9 @@ export default function CounterpartiesPage({ company, name, searchRequest }) {
   },[company,direction,query,group,sort,offset,retry]);
   const summary=data?.summary;
   return <div className="payments-page cp-page">
-    <h1 className="h-sys">Контрагенты</h1>
+    <div className="export-page-heading"><h1 className="h-sys">Контрагенты</h1>
+      <ExportControl kind="counterparties" params={{company_id:company,scope:'company',top:200}}
+        description="Топ-200 поставщиков и покупателей по сумме платежей, концентрация и группа компании. Фильтры таблицы не ограничивают выгрузку." /></div>
     <p className="h-sub">{name || data?.name} · компании, с которыми связаны ваши платежи</p>
     <p className="payments-caption payments-source-note">Одна компания — одна карточка, даже если платежи идут в обе стороны. Откройте компанию, чтобы посмотреть её профиль и взаимные расчёты.</p>
     {error && <div role="alert" className="payments-error"><div><b>Не удалось загрузить контрагентов</b><p>{error}</p></div>

@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { API_ENABLED, paymentAnalytics } from './api.js';
+import { ExportControl } from './exportControl.jsx';
 import './paymentAnalytics.css';
 
 const number = new Intl.NumberFormat('ru-RU', {maximumFractionDigits:0});
@@ -76,11 +77,12 @@ export default function PaymentAnalyticsPage({ company, name, searchRequest }) {
       <Metric label="Средний платёж" value={shortMoney(average)} exact={money(average)} hint="Сумма потоков / число платежей" />
     </div>}
     <details className="card payments-export">
-      <summary><span className="payments-export-icon" aria-hidden="true">CSV</span><span><strong>Сводка платежей</strong><small>Показатели компании в одном файле · CSV, UTF-8</small></span><span className="payments-export-chevron" aria-hidden="true">⌄</span></summary>
+      <summary><span className="payments-export-icon" aria-hidden="true">↓</span><span><strong>Выгрузка платежей</strong><small>По контрагентам · XLSX, CSV, JSON</small></span><span className="payments-export-chevron" aria-hidden="true">⌄</span></summary>
       <div className="payments-export-body">
-        <ul><li>Поступления, списания и средний платёж</li><li>Доли крупнейшего контрагента, топ-5 и своей группы</li><li>Распределение по отраслям и регионам</li><li>Переводы между своими счетами отдельной строкой</li></ul>
+        <ul><li>Сумма и число платежей по каждому контрагенту</li><li>Поступления и списания с долями каждого контрагента</li><li>ОКВЭД, регион и признак своей группы</li><li>Переводы между своими счетами отдельной строкой</li></ul>
         <p className="payments-caption">За всю доступную выборку, суммы в рублях. Дат и реквизитов отдельных операций в исходных данных нет.</p>
-        <div className="payments-export-action"><p id="payments-export-status">Скачивание пока недоступно. Показатели доступны в аналитике ниже.</p><button type="button" className="btn btn-red" disabled aria-describedby="payments-export-status">Скачать CSV</button></div>
+        <ExportControl inline kind="payments" params={{company_id:company,scope:'company',side:'both'}}
+          description="Все входящие и исходящие платежи выбранной компании, без ограничения фильтрами таблицы." />
       </div>
     </details>
     <div className="payments-direction" role="group" aria-label="Направление платежей">

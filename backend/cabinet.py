@@ -11,7 +11,7 @@ from pathlib import Path
 from common.roles import roles
 from common.data import DATA
 from backend.cache_check import check_row
-from backend.insight_previews import preview_feed
+from backend.insight_previews import preview_feed, rows_of
 
 CACHE = Path(__file__).resolve().parents[1] / 'stage5_insight_detection/analytics_insights/cache'
 NEWS_CACHE = Path(__file__).with_name('demo_cache')
@@ -103,14 +103,14 @@ def cabinet_feed(company_id, role, jobs=(), user_id=None, root=None):
     mine = [job for job in jobs if job.get('request', {}).get('company_id') == company_id
             and job['request'].get('role') == role and job['request'].get('user_id') in (None, user_id)]
     mine.sort(key=lambda job: _time(job.get('created_at')), reverse=True)
-    completed = [job for job in mine if job['status'] in ('succeeded', 'partial')]
+    completed = [job for job in mine if job['status'] in ('succeeded', 'partial') or rows_of(job)]
     try:
         completed.append(cached_job(f'demo-{company_id}-{role}', root))
     except (KeyError, OSError, ValueError):
         pass
     cards, seen, hidden = [], set(), 0
     for job in completed:
-        rows = (job.get('result') or {}).get('results', [])
+        rows = rows_of(job)
         for card in preview_feed(job)['insights']:
             key = _row_key(rows[card['result_index']])
             if key not in seen:
@@ -123,12 +123,15 @@ def cabinet_feed(company_id, role, jobs=(), user_id=None, root=None):
     running = next((job for job in mine if job['status'] in ('queued', 'running')
                     and job['request'].get('user_id') == user_id), None)
     latest = mine[0] if mine else None
+    def live_meta(job,include_error=False):
+        return dict(id=job['id'],status=job['status'],
+                    **({"error":job.get('error')} if include_error else {}),
+                    **{key:job[key] for key in ('stage','revision') if key in job}) if job else None
     return dict(computed_at=max((job.get('finished_at') or job['created_at'] for job in completed),
                                 key=_time, default=None),
                 insights=cards, hidden=hidden, status=newest['status'] if newest else 'none',
                 errors=(newest.get('result') or {}).get('errors', []) if newest else [],
-                running_job=dict(id=running['id'], status=running['status']) if running else None,
-                latest_job=dict(id=latest['id'], status=latest['status'], error=latest.get('error')) if latest else None)
+                running_job=live_meta(running),latest_job=live_meta(latest,True))
 
 
 @lru_cache(maxsize=12)

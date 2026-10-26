@@ -61,6 +61,57 @@ class SearchRequest(BaseModel):
     k: int=Field(8,ge=1,le=40)
 
 
+class ExportQuery(BaseModel):
+    """Saved cabinet data only: exporting never starts an analysis or a model."""
+    model_config=ConfigDict(extra='forbid')
+    kind: Literal['insights','payments','counterparties']
+    job_id: str | None=Field(None, pattern=r'^(?:[0-9a-f]{32}|demo-[A-Za-z0-9_-]{1,120})$')
+    company_id: str | None=Field(None, min_length=1, max_length=100, pattern=r'^[A-Za-z0-9_-]+$')
+    role: str | None=None
+    scope: Literal['company','group']='company'
+    side: Literal['both','in','out']='both'
+    top: int=Field(10, ge=1, le=200)
+    origin: Literal['all','news','bank']='all'
+    date_from: str | None=None
+    date_to: str | None=None
+
+    @model_validator(mode='after')
+    def target(self):
+        from datetime import date
+        if self.kind=='insights' and not (self.job_id or self.company_id):
+            raise ValueError('job_id or company_id is required')
+        if self.kind!='insights' and not self.company_id:
+            raise ValueError('company_id is required')
+        if self.role is not None and self.role not in roles(): raise ValueError('Unknown role')
+        for value in (self.date_from, self.date_to):
+            if value and date.fromisoformat(value).isoformat()!=value: raise ValueError('Use YYYY-MM-DD dates')
+        if self.date_from and self.date_to and self.date_from>self.date_to:
+            raise ValueError('date_from must not be after date_to')
+        return self
+
+
+class ExportBatch(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    items: list[ExportQuery]=Field(min_length=1, max_length=50)
+    format: Literal['xlsx','json','csv']='xlsx'
+    decimal: Literal['comma','dot']='comma'
+
+
+class JobStage(BaseModel):
+    code: Literal['queued','preparing_reports','collecting','analyzing','generating','verifying','finalizing',
+                  'done','failed','interrupted']
+    label: str
+    step: int
+    steps: int
+    done: int | None=None
+    total: int | None=None
+    branches: dict=Field(default_factory=dict)
+    started_at: str
+    updated_at: str
+    seq: int
+    history: list[dict]=Field(default_factory=list)
+
+
 class JobResponse(BaseModel):
     id: str
     kind: str
@@ -70,6 +121,9 @@ class JobResponse(BaseModel):
     finished_at: str | None=None
     result: dict | list | None=None
     error: str | None=None
+    stage: JobStage | None=None
+    revision: int=0
+    partial_results: list[dict] | None=None
 
 class AskRequest(BaseModel):
     """A reader's question about a finished insight; the answer streams over the saved result rows."""

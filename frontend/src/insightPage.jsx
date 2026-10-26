@@ -8,6 +8,8 @@ import { Input } from '@alfalab/core-components/input';
 import { CompactCard } from './insightCard.jsx';
 import { ALLOW_INFERENCE } from './cabinetMode.js';
 import { findInsights, insightTags, toggleInsightTag } from './cabinetToolsState.js';
+import { ExportControl } from './exportControl.jsx';
+import { AnalysisPlaceholder } from './liveInsights.jsx';
 
 const valid = s => s && !isNaN(new Date(s));
 const date = s => valid(s) ? new Date(s).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' }) : '';
@@ -15,29 +17,29 @@ const time = s => valid(s) ? new Date(s).toLocaleTimeString('ru-RU', { hour: '2-
 const Title = props => <Typography.Title font="system" {...props} />;
 const PAGE_SIZE = 8;
 
-const LIVE = { loading: 'Загружаем анализ…', none: 'Анализа ещё нет', running: 'Идёт анализ новостей и аналитики Банка…',
+const LIVE = { loading: 'Загружаем анализ…', none: 'Анализа ещё нет', starting:'Запускаем анализ…', running: 'Идёт анализ новостей и аналитики Банка…',
                error: 'Не удалось получить анализ' };
 function LiveBar({ live, run }) {
   if (live.state === 'off') return null;
   const errors = live.feed?.errors || [];
   return <div className="ip-live">
-    {live.state !== 'ready' && <Typography.Text view="primary-small" color="secondary">{LIVE[live.state]}</Typography.Text>}
+    {live.state !== 'ready' && <Typography.Text view="primary-small" color="secondary">{live.feed?.running_job?.stage?.label || LIVE[live.state]}</Typography.Text>}
     {live.state === 'ready' && errors.length > 0 && <Status color="orange" size={20}>Часть источников не обработана</Status>}
     {live.error && <Typography.Text view="primary-small" color="negative">{live.error}</Typography.Text>}
-    {ALLOW_INFERENCE && <Button size={32} view="secondary" loading={live.state === 'running'} disabled={live.state === 'loading'} onClick={run}>
+    {ALLOW_INFERENCE && <Button size={32} view="secondary" loading={['running','starting'].includes(live.state)} disabled={['loading','running','starting'].includes(live.state)} onClick={run}>
       {live.feed ? 'Обновить анализ' : 'Запустить анализ'}</Button>
     }
   </div>;
 }
 
-export default memo(function Page({ company, feed, role, live, run, visible, hidden, answers, answer, profileState, onOpen, onRestore, searchRequest }) {
+export default memo(function Page({ company, companyId, roleId, feed, role, live, run, visible, hidden, answers, answer, profileState, onOpen, onRestore, searchRequest }) {
   const [tab, setTab] = useState('feed');
   const [filters, setFilters] = useState([]);
   const [pinned, setPinned] = useState(false);
   const searchEdge = useRef(null);
   const [query, setQuery] = useState(searchRequest?.query || '');
   const [limit, setLimit] = useState(PAGE_SIZE);
-  useEffect(() => setLimit(PAGE_SIZE), [feed, filters, query]);
+  useEffect(() => setLimit(PAGE_SIZE), [filters, query]);
   useEffect(() => { if (searchRequest) {setQuery(searchRequest.query || '');setFilters([]);setTab('feed');} }, [searchRequest]);
   useEffect(()=>{
     setPinned(false);
@@ -50,7 +52,9 @@ export default memo(function Page({ company, feed, role, live, run, visible, hid
   const shown = findInsights(visible,query,filters);
   const questions = company ? company.profile.hypotheses.filter(h => !answers[h.id]).length : 0;
   return <div className="ip">
-    <h1 className="h-sys">Инсайты</h1>
+    <div className="export-page-heading"><h1 className="h-sys">Инсайты</h1>
+      {companyId && roleId && <ExportControl kind="insights" params={{company_id:companyId,role:roleId}}
+        description="Вся сохранённая лента выбранной компании для этой роли, включая скрытые карточки. Фильтры поиска не ограничивают выгрузку." />}</div>
     <p className="h-sub">Что в новостях важно для {company?.profile.name} · {role}{feed && ` · обновлено ${date(feed.computed_at)} в ${time(feed.computed_at)}`}</p>
     <LiveBar live={live} run={run} />
     <Tabs selectedId={tab} onChange={(_, { selectedId }) => setTab(selectedId)} size="s">
@@ -69,9 +73,10 @@ export default memo(function Page({ company, feed, role, live, run, visible, hid
         <div className="ip-search-status"><span role="status">{query.trim() || filters.length ? 'Найдено' : 'В ленте'} · {shown.length}{filters.length>0 && ` · тегов: ${filters.length}`}</span>
           {(query || filters.length>0) && <button type="button" onClick={()=>{setQuery('');setFilters([]);}}>Сбросить поиск и теги</button>}</div>
         </section>
-        {shown.slice(0, limit).map(i => <CompactCard key={i.id} insight={i} onOpen={onOpen} />)}
+        <AnalysisPlaceholder live={live} />
+        {shown.slice(0, limit).map(i => <CompactCard key={`${i.job_id || 'demo'}:${i.id}`} insight={i} onOpen={onOpen} />)}
         {shown.length > limit && <Button size={40} view="secondary" onClick={() => setLimit(n => n + PAGE_SIZE)}>Показать ещё</Button>}
-        {!shown.length && <p className="ip-empty">{query.trim() || filters.length ? 'Ничего не найдено. Попробуйте другие слова или измените выбранные теги.' : 'Сейчас нет событий, важных для вашей роли.'}</p>}
+        {!shown.length && !['running','starting'].includes(live.state) && <p className="ip-empty">{query.trim() || filters.length ? 'Ничего не найдено. Попробуйте другие слова или измените выбранные теги.' : 'Сейчас нет событий, важных для вашей роли.'}</p>}
         {hidden.length > 0 && <Button view="text" size={32} onClick={onRestore}>Показать скрытые ({hidden.length})</Button>}
         </>}
       </Tab>

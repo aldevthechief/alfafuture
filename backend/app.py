@@ -24,7 +24,7 @@ from common.roles import roles
 from stage5_insight_detection.bank_analytics.prepare import PreparationOptions
 from stage5_insight_detection.bank_analytics.ocr import PDF_DIR
 
-def create_app(service=None, cors_origins=None, payment_analytics=None):
+def create_app(service=None, cors_origins=None, payment_analytics=None, staff_token=None):
     payment_reports = payment_analytics if payment_analytics is not None else PaymentAnalytics()
     @asynccontextmanager
     async def lifespan(app):
@@ -49,7 +49,8 @@ def create_app(service=None, cors_origins=None, payment_analytics=None):
     origins=cors_origins if cors_origins is not None else [origin.strip() for origin in os.environ.get(
         'API_CORS_ORIGINS','http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000,http://127.0.0.1:3000').split(',') if origin.strip()]
     app.add_middleware(CORSMiddleware,allow_origins=origins,allow_credentials=True,
-                       allow_methods=['GET','POST','OPTIONS'],allow_headers=['Content-Type','Authorization','X-User-ID'])
+                       allow_methods=['GET','POST','OPTIONS'],allow_headers=['Content-Type','Authorization','X-User-ID'],
+                       expose_headers=['Content-Disposition'])
 
     User = Annotated[str | None, Header(min_length=1, max_length=100, pattern=r'^[\w.@-]+$')]
 
@@ -61,6 +62,8 @@ def create_app(service=None, cors_origins=None, payment_analytics=None):
         return request.model_copy(update={'user_id':user_id})
 
     def svc(): return app.state.service
+    from backend.export_routes import create_export_router
+    app.include_router(create_export_router(svc,staff_token))
     def require_inference():
         if os.environ.get('CABINET_MODE', 'full') == 'server':
             raise HTTPException(403, 'This server only serves prepared demo accounts')
@@ -123,6 +126,37 @@ def create_app(service=None, cors_origins=None, payment_analytics=None):
             return svc().agents.get(job_id, project=owned)
         except (KeyError, FileNotFoundError):
             raise HTTPException(404, 'Unknown insight')
+
+    @app.get('/v1/jobs/{job_id}/events',tags=['jobs'],response_class=StreamingResponse,
+             summary='Live stages and checked insight previews; full snapshot on reconnect')
+    async def job_events(job_id: str, x_user_id: User = None, heartbeat: float = Query(10,ge=1,le=60)):
+        import asyncio
+        from backend.insight_previews import DONE
+        # The same ownership check protects previews, full cards and the event stream.
+        insight_projection(job_id,x_user_id,metadata)
+        if job_id.startswith('demo-'):
+            raise HTTPException(404,'Saved demo feeds do not have a live event stream')
+        def project(job):
+            from backend.cabinet import cabinet_feed
+            request=job['request']
+            # Apply the same source checks/dedup as the normal cabinet feed.
+            feed=cabinet_feed(request['company_id'],request['role'],[job],x_user_id,svc().root)
+            own=preview_feed(job)
+            own['insights']=[card for card in feed['insights'] if card['job_id']==job_id]
+            return dict(metadata(job),feed=own)
+        async def events():
+            version=-1
+            while True:
+                seen,item=await asyncio.to_thread(svc().agents.wait_change,job_id,version,
+                                                   0 if version<0 else heartbeat,project)
+                if seen!=version:
+                    version=seen
+                    yield f'id: {version}\nevent: job\ndata: '+json.dumps(item,ensure_ascii=False,default=str)+'\n\n'
+                else:
+                    yield ': keep-alive\n\n'
+                if item['status'] in DONE: return
+        return StreamingResponse(events(),media_type='text/event-stream',
+                                 headers={'Cache-Control':'no-cache','X-Accel-Buffering':'no'})
 
     @app.get('/v1/jobs/{job_id}/insights',tags=['jobs'])
     def insight_previews(job_id: str, x_user_id: User = None):

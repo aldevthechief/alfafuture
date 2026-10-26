@@ -5,7 +5,7 @@
 import React, { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { createPortal } from 'react-dom';
-import { API_ENABLED, USER_ID, cabinetAccounts, cabinetFeed, startAnalysis } from './api';
+import { API_ENABLED, USER_ID, cabinetAccounts } from './api';
 import './insights.css';
 import AccountChooser from './accountChooser.jsx';
 import { SESSION_KEY, validSession } from './cabinetMode.js';
@@ -18,6 +18,8 @@ import { CompanySwitcher } from './companySwitcher.jsx';
 import { useCompanyProfile } from './companyProfile.js';
 import { insightIdentity, notificationScope, readInsightViews, mergeInsightViews } from './cabinetToolsState.js';
 import './cabinetTools.css';
+import { useLive } from './useLiveFeed.js';
+import { InsightArrivals } from './liveInsights.jsx';
 
 let insightWindowModule;
 const prepareInsightWindow = () => insightWindowModule ??= import('./insightWindow.jsx')
@@ -51,39 +53,6 @@ function useCtx() {
     return () => window.removeEventListener('demo:context', on);
   }, []);
   return ctx;
-}
-
-// API state for the selected company and role: off | loading | none (no analysis yet) | running | ready | error
-function useLive(ctx) {
-  const [live, setLive] = useState({ state: API_ENABLED ? 'loading' : 'off' });
-  const [activeJob, setActiveJob] = useState(null);
-  useEffect(() => {
-    if (!API_ENABLED) return;
-    let stop = false;
-    let timer;
-    setLive({ state: 'loading' });
-    const refresh = async () => {
-      try {
-        const feed = await cabinetFeed(ctx.company, ctx.role);
-        if (stop) return;
-        const latest = feed.latest_job;
-        const requested = activeJob || (ctx.kind === 'live' ? ctx.job_id : null);
-        const failed = latest?.id === requested && ['failed', 'interrupted'].includes(latest.status);
-        setLive({ state:feed.running_job ? 'running' : feed.insights.length ? 'ready' : failed ? 'error' : 'none',
-          feed, error:failed ? latest.error || `Анализ: ${latest.status}` : null });
-      } catch (error) {
-        if (!stop) setLive(l => ({ ...l, state:l.feed?.insights.length ? 'ready' : 'error', error:error.message }));
-      } finally {
-        if (!stop) timer = setTimeout(refresh, 5000);
-      }
-    };
-    refresh();
-    // Refresh only small previews; full evidence is still fetched only when a card opens.
-    return () => { stop = true; clearTimeout(timer); };
-  }, [ctx.company, ctx.role, ctx.job_id, ctx.kind, activeJob]);
-  const run = useCallback(() => startAnalysis(ctx.company, ctx.role).then(job => setActiveJob(job.id))
-    .catch(e => setLive(l => ({ ...l, state: 'error', error: e.message }))), [ctx.company, ctx.role]);
-  return [live, run];
 }
 
 function App() {
@@ -171,6 +140,7 @@ function App() {
   const slot = id => document.getElementById(id);
 
   return <>
+    <InsightArrivals cards={live.initialized || live.state==='off' ? feed?.insights : undefined} onOpen={openInsight} />
     {createPortal(unread.length ? <span className="cabinet-notification-count" aria-label={`Новых инсайтов: ${unread.length}`}>{unread.length>99 ? '99+' : unread.length}</span> : null,slot('notifications-badge'))}
     {tool && <Suspense fallback={<div className="insight-opening" role="status">Открываем…</div>}>
       <CabinetTools key={tool} tool={tool} company={ctx.company} companyName={ctx.company_meta?.name || company?.profile.name}
@@ -197,10 +167,11 @@ function App() {
     {view==='home' && createPortal(<Suspense fallback={<p role="status">Загружаем обзор компании…</p>}>
       <HomeDashboard company={ctx.company} name={ctx.company_meta?.name || company?.profile.name} role={role}
         insights={visible} unreadCount={unread.length} feedDate={feed?.computed_at} feedState={live.state} feedError={live.error}
+        feedJob={live.feed?.running_job}
         onOpen={openInsight} onNavigate={navigateSearch} onNotifications={()=>setTool('notifications')}/>
     </Suspense>,slot('home-page'))}
     {view === 'insights' && createPortal(<Suspense fallback={<p role="status">Загружаем ленту…</p>}>
-      <InsightPage {...{ company, feed, role, live, run, visible, hidden, searchRequest:insightSearch, profileState:ctx.company_meta ? profileState : undefined,
+      <InsightPage {...{ company, companyId:ctx.company, roleId:ctx.role, feed, role, live, run, visible, hidden, searchRequest:insightSearch, profileState:ctx.company_meta ? profileState : undefined,
         answers:ctx.company_meta ? profileState.answers : answers[ctx.company] || EMPTY_ANSWERS, answer, onOpen: openInsight, onRestore: restore }} />
     </Suspense>, slot('insights-page'))}
     {open && <Suspense fallback={<div className="insight-opening" role="status">Открываем инсайт…</div>}>

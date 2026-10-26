@@ -4,6 +4,7 @@ import { insightSignal } from './insightSignal.js';
 import { day } from './insightView.js';
 import { companySearchNumber } from './siteSearch.js';
 import './homeDashboard.css';
+import { AnalysisPlaceholder } from './liveInsights.jsx';
 
 const integer=new Intl.NumberFormat('ru-RU');
 const compact=new Intl.NumberFormat('ru-RU',{style:'currency',currency:'RUB',notation:'compact',maximumFractionDigits:1});
@@ -24,7 +25,7 @@ function Metric({ label, value, title, hint, icon, tone, onClick, loading }) {
   </button>;
 }
 
-export default function HomeDashboard({ company, name, role, insights, unreadCount, feedDate, feedState, feedError, onOpen, onNavigate, onNotifications }) {
+export default function HomeDashboard({ company, name, role, insights, unreadCount, feedDate, feedState, feedError, feedJob, onOpen, onNavigate, onNotifications }) {
   const [data,setData]=useState({profile:null,payments:null,relationships:null,loading:API_ENABLED,errors:[]});
   const [retry,setRetry]=useState(0);
   useEffect(()=>{
@@ -59,6 +60,7 @@ export default function HomeDashboard({ company, name, role, insights, unreadCou
     <p className="hd-source">Платежи за всю доступную выборку. Период в исходных данных не указан.</p>
     {!!data.errors.length && <div className="hd-error" role="alert"><p>Не удалось загрузить: {data.errors.join(', ')}.</p><button type="button" onClick={()=>setRetry(n=>n+1)}>Повторить</button></div>}
     {!API_ENABLED && <p className="hd-error">Для сводки компании подключите API кабинета.</p>}
+    <AnalysisPlaceholder live={{state:feedState,feed:{running_job:feedJob,insights}}} />
     <div className="hd-main-grid">
       <section className={`card hd-feature${signal ? ` hd-feature-${signal.tone}` : ''}`} aria-labelledby="hd-feature-title">
         <div className="hd-section-label"><span><Icon name="insight"/>В центре внимания</span>{unreadCount>0 && <button type="button" className="hd-unread" onClick={onNotifications}>Новых · {unreadCount}</button>}</div>

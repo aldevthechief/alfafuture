@@ -32,5 +32,6 @@ pymorphy3==2.0.4
 fastapi==0.161.1
 uvicorn==0.54.0
 python-multipart==0.0.32
+XlsxWriter==3.3.0
 redis==6.4.0
 langgraph-checkpoint-sqlite==3.1.2

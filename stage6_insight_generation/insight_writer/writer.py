@@ -15,6 +15,7 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from common import progress
 from common.chunk_search import article_context
 from common.news_evidence import verify_claim_evidence
 from common.llm import ChatModels, PromptLibrary, StructuredOutputError, structured
@@ -156,18 +157,22 @@ class InsightWriter:
     def write(self, company_id: str, role: str, decision: str, evidence: Evidence) -> tuple[Insight, Review]:
         """The final insight and the checker's review; a rejected draft is fixed once in the same dialog and then final."""
         inputs, dialog = self._dialog(company_id, role, decision, evidence)
+        progress.phase('write')
         # identity comes from the caller, never from a generated display name (cached answers included)
         insight = self.writer.invoke(dialog).model_copy(update={'role': role})
         review = self._check(insight, inputs, evidence)
         if review.ok:
             return insight, review
+        progress.phase('write')
         return self.writer.invoke(self._fix(dialog, insight, review, evidence)).model_copy(update={'role': role}), self._fixed(review)
 
     async def awrite(self, company_id: str, role: str, decision: str, evidence: Evidence) -> tuple[Insight, Review]:
         """write() with the model calls awaited (no thread waits on the LLM); the local evidence checks stay sync."""
         inputs, dialog = self._dialog(company_id, role, decision, evidence)
+        progress.phase('write')
         insight = (await self.writer.ainvoke(dialog)).model_copy(update={'role': role})
         verify_claim_evidence(insight, evidence.news, evidence.bank, origin=evidence.origin)
+        progress.phase('check')
         try:
             review = await self.checker.ainvoke(self._check_inputs(insight, inputs))
         except StructuredOutputError:
@@ -177,6 +182,7 @@ class InsightWriter:
                 review = self._unchecked()
         if review.ok:
             return insight, review
+        progress.phase('write')
         fixed = await self.writer.ainvoke(self._fix(dialog, insight, review, evidence))
         return fixed.model_copy(update={'role': role}), self._fixed(review)
 
@@ -208,6 +214,7 @@ class InsightWriter:
         return found
 
     def _check(self, insight: Insight, inputs: dict, evidence: Evidence) -> Review:
+        progress.phase('check')
         # Verbatim quotes get offsets for the card; a missing or paraphrased quote only marks the claim «не подтверждено»
         # (as a blocking issue it rejected 4 of 5 insights on U_68622, 22.10: «(dp, 22.09.2026)» appended, paraphrases).
         verify_claim_evidence(insight, evidence.news, evidence.bank, origin=evidence.origin)

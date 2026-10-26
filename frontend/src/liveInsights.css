@@ -1,0 +1,18 @@
+.analysis-placeholder{padding:24px;margin:12px 0 20px;overflow:hidden}
+.analysis-stage{display:flex;align-items:center;gap:16px}
+.analysis-stage strong{font-size:18px;font-weight:650}
+.analysis-stage p,.analysis-note{font-size:13px;color:var(--text-3);margin:6px 0 0;line-height:1.5}
+.analysis-orbit{width:28px;height:28px;flex-shrink:0;border:3px solid var(--line);border-top-color:#ef3124;border-radius:50%;animation:analysis-spin 1.2s linear infinite}
+.analysis-skeleton{display:grid;gap:10px;margin:24px 0 18px}
+.analysis-skeleton span{height:10px;border-radius:5px;background:var(--fill);animation:analysis-pulse 1.8s ease-in-out infinite}
+.analysis-skeleton span:nth-child(2){width:88%}.analysis-skeleton span:nth-child(3){width:62%}
+.insight-arrivals{position:fixed;right:24px;bottom:24px;z-index:1500;display:grid;gap:10px;width:min(380px,calc(100vw - 32px));pointer-events:none}
+.insight-arrival{display:flex;align-items:flex-start;gap:14px;padding:18px 20px;background:var(--card);color:var(--text);border:1px solid var(--line);border-radius:18px;box-shadow:0 12px 44px #0002;pointer-events:auto;animation:arrival-in .25s ease-out}
+.insight-arrival>div{flex:1;min-width:0}.insight-arrival span{font-size:12px;color:var(--text-3)}
+.insight-arrival strong{display:block;font-size:15px;margin:6px 0 12px;line-height:1.4}
+.arrival-open,.arrival-close{border:0;background:none;font:inherit;cursor:pointer;color:inherit;padding:0}
+.arrival-open{font-size:13px;font-weight:600;color:var(--text)}.arrival-close{font-size:22px;color:var(--text-3)}
+.arrival-announcement{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+@keyframes analysis-spin{to{transform:rotate(360deg)}}@keyframes analysis-pulse{50%{opacity:.45}}@keyframes arrival-in{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+@media(prefers-reduced-motion:reduce){.analysis-orbit,.analysis-skeleton span,.insight-arrival{animation:none}}
+@media(max-width:600px){.analysis-placeholder{padding:18px}.insight-arrivals{right:16px;bottom:16px}.analysis-stage strong{font-size:16px}}

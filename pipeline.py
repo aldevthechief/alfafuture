@@ -39,6 +39,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from common.data import DATA
 from common.llm import ChatModels, StructuredOutputError
 from common.news_corpus import StaleNewsReferences, bind_result, save_results
+from common import progress
 from common.roles import roles
 from common.search import corpus_fingerprint, news_pool
 from common.news_snapshot import pinned_run, news_snapshot
@@ -111,7 +112,9 @@ class InsightPipeline:
         pers = scoped_personalization(personalization, company_id, role)
         self._params = {'company_id': company_id, 'role': role, 'n_judge': n_judge,
                         'personalization': pers, 'user_context': personalization_context(pers)}
+        progress.enter('collecting')
         rows = self._prepare(company_id, role, n_candidates, retrieval)
+        progress.enter('analyzing',total=len(rows))
         # one event loop per run: the LLM calls of all news are coroutines in flight together, no thread waits on a model
         state = asyncio.run(self.news_graph().ainvoke({'rows': rows}, config={'max_concurrency': max(1, workers)}))
         return state['news_results']
@@ -217,6 +220,7 @@ class InsightPipeline:
 
         # the task's own copy of the run context (Langfuse session, news snapshot), as the thread version had
         priority, news, out = await asyncio.get_running_loop().create_task(body(), context=item['ctx'])
+        progress.tick('analyzing')
         return {'assessed': [(idx, priority, news, out)]}
 
     def _rank_node(self, state: _NewsState) -> dict:
@@ -229,6 +233,8 @@ class InsightPipeline:
             else:
                 scored.append((idx, priority, news, out))
         top = [t for t in sorted(scored, key=lambda t: (-t[1], t[0]))[:self._params['n_judge']] if t[1] > 0]
+        progress.expect(len(top))
+        progress.emit('ranked',rows=[((0,n),row) for n,row in enumerate(error_rows)])
         return {'news_results': error_rows, 'top': [(priority, news, stage4) for _, priority, news, stage4 in top]}
 
     async def _judge_node(self, item: dict) -> dict:
@@ -281,6 +287,9 @@ class InsightPipeline:
             for lpos, lnews, lresult, _ in losers:
                 rows.append((lpos, self._record(lnews, **lresult, status='duplicate', duplicate_of=news['id'])))
                 dropped.add(lpos)
+        for pos, row in rows:
+            if (p := progress.current()) is not None: p.phase(pos,'done')
+            progress.emit('row',key=(1,pos),row=row)
         return {'judge_rows': rows, 'to_write': [t for t in positive if t[0] not in dropped]}
 
     def _gate_item(self, pos: int, news: dict, result: dict, decision) -> dict:
@@ -290,8 +299,13 @@ class InsightPipeline:
 
     async def _write_node(self, item: dict) -> dict:
         """Stage 6 for one positive decision: writer -> checker -> (one fix) -> audit, as one result row."""
-        result, news = await asyncio.get_running_loop().create_task(self._write(item), context=item['ctx'])
-        return {'judge_rows': [(item['pos'], self._record(news, **result))]}
+        async def tracked():
+            with progress.track(item['pos']):
+                return await self._write(item)
+        result, news = await asyncio.get_running_loop().create_task(tracked(), context=item['ctx'])
+        row = self._record(news, **result)
+        progress.emit('row',key=(1,item['pos']),row=row)
+        return {'judge_rows': [(item['pos'], row)]}
 
     async def _write(self, item: dict) -> tuple[dict, dict]:
         p = self._params
@@ -322,6 +336,7 @@ class InsightPipeline:
                 news_lookup=writer_news.get,
                 facts=facts).model_dump(mode='json')
             if review.ok:
+                progress.phase('audit')
                 from stage5_insight_detection.analyst_loop.audit import audit
                 from stage5_insight_detection.analyst_loop.verdict import InsightBrief
                 evidence_facts = [dict(id=f'fact:{i}', value='', unit='', formula='', label=f)
@@ -547,9 +562,11 @@ def build_e2e_graph(pipe: InsightPipeline, *, with_analytics: bool, run_analytic
         return {'analytics': run, 'analytics_error': error}
 
     def merge(s: E2EState) -> dict:
+        progress.enter('finalizing')
         results = [migrate_fn(r) for r in s['news_results']]  # contract v2 (a superset of the old one)
-        return {'results': results + (analytics_rows_fn(s['analytics'], s['analytics_error'], results)
-                                      if with_analytics else [])}
+        results += analytics_rows_fn(s['analytics'], s['analytics_error'], results) if with_analytics else []
+        progress.emit('merged',rows=results)
+        return {'results': results}
 
     def save(s: E2EState) -> dict:
         return {'out': save_fn(s['results'])}

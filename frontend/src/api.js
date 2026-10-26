@@ -1,6 +1,7 @@
 // Backend client (docs/API.md): POST /v1/analyses → poll GET /v1/jobs/{id}; the job result is mapped to the feed.json shape
 // the widgets already read. VITE_API_URL sets the base, VITE_API_URL=off keeps the demo feed.json only.
 import { ALLOW_INFERENCE } from './cabinetMode.js';
+import { followUpdates } from './jobUpdates.js';
 const ENV = import.meta.env || {};
 const BASE = (ENV.VITE_API_URL ?? (ENV.DEV ? '.' : 'http://127.0.0.1:8000')).replace(/\/$/, '');
 export const USER_ID = ENV.VITE_USER_ID || 'demo-user';
@@ -24,6 +25,31 @@ export async function requestJson(base, path, init = {}) {
 }
 const call = (path, init) => requestJson(BASE, path, init);
 
+export async function fetchExport(kind, params, signal) {
+  if (!API_ENABLED) throw new Error('Для выгрузки подключите API кабинета.');
+  if (!['insights','payments','counterparties'].includes(kind)) throw new Error('Неизвестная выгрузка.');
+  const query = new URLSearchParams(Object.entries(params).filter(([, value]) => value != null && value !== ''));
+  const response = await fetch(`${BASE}/v1/exports/${kind}?${query}`, { headers:{'X-User-ID':USER_ID}, signal });
+  if (!response.ok) {
+    const detail = (await response.json().catch(() => ({}))).detail;
+    throw new ApiError(response.status, response.status === 404 ? 'Нет данных для выгрузки.'
+      : typeof detail === 'string' ? detail : 'Не удалось подготовить файл. Попробуйте ещё раз.');
+  }
+  const name = /filename="([^"]+)"/.exec(response.headers.get('Content-Disposition') || '')?.[1]
+    || `alfa-${kind}.${params.format || 'xlsx'}`;
+  const blob = await response.blob();
+  signal?.throwIfAborted();
+  return { name, blob };
+}
+
+export async function downloadExport(kind, params, signal) {
+  const {name, blob} = await fetchExport(kind, params, signal);
+  const url = URL.createObjectURL(blob);
+  const link = Object.assign(document.createElement('a'), {href:url, download:name});
+  try { document.body.append(link); link.click(); }
+  finally { link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000); }
+}
+
 // latest analysis of this company and role: the finished one to show, and the one still running (if newer)
 export async function latestJobs(company, role) {
   const { analyses } = await call('/v1/jobs?include_results=false');
@@ -41,7 +67,18 @@ export const startAnalysis = (company, role, options = {}) => {
 };
 
 export const cabinetAccounts = () => call('/v1/cabinet/accounts');
-export const cabinetFeed = (company, role) => call(`/v1/cabinet/feed?company_id=${encodeURIComponent(company)}&role=${encodeURIComponent(role)}`);
+export const cabinetFeed = (company, role, signal) => call(`/v1/cabinet/feed?company_id=${encodeURIComponent(company)}&role=${encodeURIComponent(role)}`,{signal});
+
+export function followJob(id,onUpdate,{signal,onError}={}) {
+  return followUpdates({signal,onUpdate,onError,
+    stream:signal=>fetch(`${BASE}/v1/jobs/${encodeURIComponent(id)}/events`,{headers:{'X-User-ID':USER_ID},signal}),
+    poll:async signal=>{
+      const job=await call(`/v1/jobs/${encodeURIComponent(id)}?include_result=false`,{signal});
+      const feed=await cabinetFeed(job.request.company_id,job.request.role,signal);
+      return {...job,feed:{...feed,insights:feed.insights.filter(card=>card.job_id===id)}};
+    },
+  });
+}
 export const searchCompanies = query => call(`/v1/cabinet/companies?q=${encodeURIComponent(query)}`);
 export const paymentAnalytics = (company, { direction='out', q='', sort='amount', offset=0, limit=15 } = {}, signal) =>
   call(`/v1/companies/${encodeURIComponent(company)}/payments?${new URLSearchParams({direction,q,sort,offset,limit})}`, {signal});

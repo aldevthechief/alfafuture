@@ -14,6 +14,9 @@ from common.personalization import load_personalization
 from common.search import news_pool, corpus_fingerprint
 from backend.catalog import Catalog
 from backend.jobs import Jobs
+from backend.progress import RunProgress
+from backend.insight_previews import rows_of
+from common import progress
 from stage5_insight_detection.bank_analytics.ocr import PDF_DIR
 from stage5_insight_detection.bank_analytics.prepare import PreparationOptions
 
@@ -30,6 +33,7 @@ class Service:
         from backend.calendar_index import maybe_index_job
         self.agents.on_finish=maybe_index_job  # calendar SQLite index per finished analysis; never breaks the pool
         self.pdfs=Jobs(self.root/'pdf_jobs',pdf_workers)
+        self.exports=Jobs(self.root/'exports',2)
         self._checkpointing=checkpointing
         self._checkpointer=None
         self._compact_locks={}; self.auto_compact=auto_compact
@@ -53,7 +57,7 @@ class Service:
     def prepare(self,path,options,seed_dir=None):
         path=Path(path)
         return self.pdfs.submit('report',dict(file=path.name,options=options.__dict__),
-            lambda:self.catalog.prepare(path,options,self.models_factory(),seed_dir))
+            lambda:self.catalog.prepare(path,options,self.models_factory(),seed_dir),start='preparing_reports')
 
     def analyze(self,request):
         job=self.agents.submit('analysis',request.model_dump(),lambda:self.run(request))
@@ -65,11 +69,16 @@ class Service:
 
     def run(self,r):
         import pipeline
+        progress.listen(RunProgress(progress.results,lambda row:pipeline.migrate_result(row,r.company_id)))
+        prep=r.bank_prepare or r.bank_charts or r.bank_tables or r.bank_digest
+        progress.plan([*(['preparing_reports'] if prep or r.ocr else []),
+                       *(['analyzing','finalizing'] if r.source=='analytics' else progress.DEFAULT_PLAN)])
         personalization = load_personalization(r.user_id, r.company_id, r.role) if r.user_id else None
         models=self.models_factory()
         run_dir=self.root/'results'/uuid4().hex
         prep=r.bank_prepare or r.bank_charts or r.bank_tables or r.bank_digest
         if prep or r.ocr:
+            progress.enter('preparing_reports')
             options=PreparationOptions(ocr=r.ocr or prep,charts=r.bank_prepare or r.bank_charts,tables=r.bank_prepare or r.bank_tables,
                 digests=r.bank_prepare or r.bank_digest,chart_mode=r.chart_mode,
                 ocr_budget=15 if r.ocr_budget is None else r.ocr_budget,
@@ -91,6 +100,8 @@ class Service:
                 archive_corpus(news,DATA/'news')
 
             def analytics_run_task():
+                progress.branch('analytics','running')
+                if r.source=='analytics': progress.enter('analyzing',label='Разбираем аналитику банка')
                 # Snapshot-specific cache avoids serving an analysis from a different set of reports.
                 from stage2_company_facts.profile.integration import load_company
                 from stage5_insight_detection.analytics_insights.service import analytics_run
@@ -98,8 +109,10 @@ class Service:
                     run=analytics_run(r.company_id,r.role,load_company(r.company_id).facts,models=models,bank=bank,
                         cache_only=r.analytics_cache_only,refresh=r.analytics_refresh,
                         cache_dir=self.root/'analytics_cache'/version)
+                    progress.branch('analytics','failed' if getattr(run,'error','') else 'done',getattr(run,'error','') or None)
                     return run,''
                 except Exception as exc:
+                    progress.branch('analytics','failed',f'{type(exc).__name__}: {exc}')
                     return None,f'{type(exc).__name__}: {exc}'
 
             def note_analytics(run,error):
@@ -138,6 +151,8 @@ class Service:
                 run,error=analytics_run_task()
                 note_analytics(run,error)
                 results=pipeline.analytics_rows(run,'',[],r.analytics_share,r.analytics_cache_only) if run is not None else []
+                progress.enter('finalizing')
+                progress.emit('merged',rows=results)
             else:
                 results=judge_engine()
                 components['news']={'status':'succeeded'}
@@ -213,7 +228,7 @@ class Service:
         import asyncio, json
         from stage6_insight_generation.insight_compact.compact import InsightCompactor
         path = self.root / 'compact' / f'{job_id}.json'
-        results = ((job if job is not None else self.agents.get(job_id)).get('result') or {}).get('results', [])
+        results = rows_of(job if job is not None else self.agents.get(job_id))
         # the id the UI gives the card (backend/insight_previews.py): its own id, else the row index in the results
         ids = {id(r): r['insight'].get('id') or f"row-{n}-{r.get('news_id', 'bank')}"
                for n, r in enumerate(results) if r.get('status') == 'ready' and r.get('insight')}
@@ -246,9 +261,102 @@ class Service:
         path = DATA / 'insights' / f'{company_id}_{role}.json'
         return json.loads(path.read_text(encoding='utf-8')) if path.exists() else []
 
+    # --- saved-data exports; independent of the agent and PDF pipelines
+    def case_tables(self):
+        from common.data import load
+        return load()
+
+    def may_see(self,user_id,company_id,staff=False):
+        """Optional demo access file; X-User-ID follows the existing development identity contract."""
+        import json
+        path=self.root/'access.json'
+        if staff or not path.exists(): return True
+        allowed=set(json.loads(path.read_text(encoding='utf-8')).get(user_id or '',[]))
+        if company_id in allowed: return True
+        companies=self.case_tables()[0]
+        return company_id in companies.index and companies.at[company_id,'GROUP_ID'] in allowed
+
+    def export_tables(self,q,user_id=None,staff=False):
+        from backend import exports
+        from backend.cabinet import cabinet_feed, cached_job
+        if q.kind!='insights':
+            U,P,S,F=self.case_tables()
+            if q.company_id not in U.index or not self.may_see(user_id,q.company_id,staff): raise KeyError(q.company_id)
+            ids=exports.group_members(U,q.company_id) if q.scope=='group' else [q.company_id]
+            if any(not self.may_see(user_id,company,staff) for company in ids): raise KeyError(q.company_id)
+            tables=exports.payment_tables(U,P,S,ids,q.side) if q.kind=='payments' else exports.counterparty_tables(U,P,F,ids,q.top)
+            return tables,dict(company_id=q.company_id,scope=q.scope,companies=len(ids),period=None,
+                               group_id=str(U.at[q.company_id,'GROUP_ID'])),\
+                f'alfa-{q.kind}_{q.company_id}' + ('_group' if q.scope=='group' else '')
+
+        entries=[]
+        if q.job_id:
+            job=cached_job(q.job_id,self.root) if q.job_id.startswith('demo-') else self.agents.get(q.job_id)
+            request=job['request']
+            if request.get('user_id') not in (None,user_id): raise KeyError(q.job_id)
+            company=request['company_id']; role=request['role']
+            if (q.company_id and q.company_id!=company) or (q.role and q.role!=role): raise KeyError(q.job_id)
+            from backend.insight_previews import preview_feed
+            cards=preview_feed(job)['insights']
+            entries=[(job, rows_of(job)[card['result_index']], card['id']) for card in cards]
+        else:
+            company=q.company_id; role=q.role or 'cfo'
+            with self.agents.lock:
+                jobs=tuple(dict(job) for job in self.agents.items.values())
+            feed=cabinet_feed(company,role,jobs,user_id,self.root)
+            by_id={job['id']:job for job in jobs}
+            for card in feed['insights']:
+                job=by_id.get(card['job_id'])
+                if job is None:
+                    job=cached_job(card['job_id'],self.root)
+                    by_id[card['job_id']]=job
+                entries.append((job,rows_of(job)[card['result_index']],card['id']))
+        if not self.may_see(user_id,company,staff): raise KeyError(company)
+        merged={}; selected={}
+        for job,row,card_id in entries:
+            insight=row.get('insight') or {}
+            bank=row.get('source')=='bank_analytics' or insight.get('origin')=='bank'
+            ref=(row.get('news_references') or {}).get(f"news:{row.get('news_id')}") or {}
+            when=str(insight.get('event_date') or ref.get('date') or '')[:10]
+            if q.origin!='all' and (q.origin=='bank')!=bank: continue
+            if q.date_from and (not when or when<q.date_from): continue
+            if q.date_to and (not when or when>q.date_to): continue
+            row=dict(row,insight=dict(insight,id=card_id))
+            for name,(columns,rows) in exports.insight_tables([row],job=job,company_id=company,role=role).items():
+                merged.setdefault(name,(columns,[]))[1].extend(rows)
+            selected[job['id']]=job
+        if not merged or not merged['insights'][1]: raise KeyError(company)
+        versions={str((job.get('result') or {}).get('bank_version')) for job in selected.values()
+                  if (job.get('result') or {}).get('bank_version')}
+        fingerprints={str((job.get('result') or {}).get('corpus_fingerprint')) for job in selected.values()
+                      if (job.get('result') or {}).get('corpus_fingerprint')}
+        return merged,dict(company_id=company,role=role,origin=q.origin,
+                           job_id=next(iter(selected)) if len(selected)==1 else None,job_ids=list(selected),
+                           bank_version=next(iter(versions)) if len(versions)==1 else None,bank_versions=sorted(versions),
+                           corpus_fingerprints=sorted(fingerprints)),f'alfa-insights_{company}_{role}'
+
+    def export_batch(self,batch,user_id=None,staff=False):
+        from backend import exports
+        def work():
+            merged={};metas=[]
+            for q in batch.items:
+                tables,meta,_=self.export_tables(q,user_id,staff)
+                metas.append(meta)
+                for name,(columns,rows) in tables.items():
+                    merged.setdefault(name,(columns,[]))[1].extend(rows)
+            kinds=sorted({q.kind for q in batch.items})
+            data,media,ext=exports.render(merged,exports.meta_for(kinds[0],items=metas,kinds=kinds),batch.format,
+                                          decimal=batch.decimal)
+            folder=self.root/'exports'/'files';folder.mkdir(parents=True,exist_ok=True)
+            from datetime import date
+            path=folder/(uuid4().hex+'.'+ext);path.write_bytes(data)
+            return dict(file=path.relative_to(self.root).as_posix(),name=f'alfa-export_{date.today().isoformat()}.{ext}',
+                        media_type=media,bytes=len(data),rows={k:len(v[1]) for k,v in merged.items()})
+        return self.exports.submit('export',dict(batch.model_dump(),user_id=user_id),work)
+
     def close(self):
         # Analysts may wait on the PDF pool; stop them first.
-        self.agents.close(); self.pdfs.close()
+        self.agents.close(); self.pdfs.close(); self.exports.close()
         conn = getattr(self, '_conn', None)
         if conn is not None:
             conn.close()
