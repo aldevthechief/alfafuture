@@ -66,13 +66,13 @@ export function useLive(ctx) {
     if (!API_ENABLED || (live.feed?.insights.length || 0)<6 || rank.key===rankKey) return;
     const controller=new AbortController();
     cabinetTop(ctx.company,ctx.role,controller.signal).then(top=>{
-      if (!controller.signal.aborted && Array.isArray(top.order)) setRank({key:rankKey,order:top.order});
+      if (!controller.signal.aborted && Array.isArray(top.order)) setRank({key:rankKey,order:top.order,top:top.ids});
     }).catch(()=>{});
     return ()=>controller.abort();
   },[rankKey]);
   const ordered=useMemo(()=>{
     if (!live.feed || rank.key!==rankKey) return live;
-    return {...live,feed:applyTopOrder(live.feed,rank.order)};
+    return {...live,feed:applyTopOrder(live.feed,rank.order,rank.top)};
   },[live,rank,rankKey]);
   return [ordered,run];
 }

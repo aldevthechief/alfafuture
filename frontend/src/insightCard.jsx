@@ -15,6 +15,7 @@ export const CompactCard = memo(function CompactCard({ insight: i, compact, onOp
   return <button className={`card ic ic2 insight-tone-${insightSignal(i).tone}`} onClick={() => onOpen(i)}>
     <div className="ic-tags">
       <SignalBadge insight={i} />
+      {i.top && <Status color="green" size={20}>Топ-5</Status>}
       <Status color="blue" size={20}>{i.channel}</Status>
       <span title={confidenceDescription(i)}><Status color={color} size={20}>{conf}</Status></span>
       {(i.counts?.bank_view ?? i.bank_view.length) > 0 && <Status color="purple" size={20}>Позиция Банка</Status>}
