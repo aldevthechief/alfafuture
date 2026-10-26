@@ -32,6 +32,36 @@ def _redis(prefix: str):
     return client, f'alfa:{prefix}'
 
 
+def unpack(path: Path) -> Path:
+    """The repo ships the LLM cache as <name>.jsonl.gz: a fresh clone unpacks it once, next to it (atomic rename)."""
+    packed = path.with_name(path.name + '.gz')
+    if not path.exists() and packed.exists():
+        import gzip, shutil
+        tmp = path.with_name(f'{path.name}.{os.getpid()}.tmp')
+        try:
+            with gzip.open(packed, 'rb') as src, open(tmp, 'wb') as dst:
+                shutil.copyfileobj(src, dst)
+            os.replace(tmp, path)
+        except OSError:
+            tmp.unlink(missing_ok=True)
+    return path
+
+
+def seed_if_empty(client, key: str, path: Path) -> None:
+    """An empty Redis (new volume) is warmed from the shipped JSONL; a filled one is left as is."""
+    try:
+        if client.exists(key) or not unpack(path).exists():
+            return
+        with open(path, encoding='utf-8') as f:
+            entries = [json.loads(line) for line in f if line.strip()]
+        pipe = client.pipeline(transaction=False)
+        for d in entries:
+            pipe.hsetnx(key, d['key'], d['value'])
+        pipe.execute()
+    except Exception:
+        pass  # warm start only: a cold cache still works, just calls the model
+
+
 class JsonlCache:
     def __init__(self, name: str, folder: Path = DATA / 'news' / 'llm_cache'):
         self.name = name
@@ -153,6 +183,7 @@ class FileLLMCache(BaseCache):
 
     def __init__(self, folder: Path = DATA / 'llm_cache'):
         self.store = JsonlCache('llm', folder)
+        unpack(self.store.path)
 
     @staticmethod
     def _key(prompt: str, llm_string: str) -> str:
@@ -185,6 +216,7 @@ def _redis_llm_cache() -> BaseCache | None:
     if not shared:
         return None
     client, key = shared
+    seed_if_empty(client, key, DATA / 'llm_cache' / 'llm.jsonl')
 
     class RedisLLMCache(BaseCache):
         """Same request -> same answer from Redis, no API call; the volume keeps them across restarts."""
