@@ -2,12 +2,15 @@
 import copy
 import json
 import re
+import threading
+import time
 from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
 
 from common.roles import roles
 from common.data import DATA
+from backend.cache_check import check_row
 from backend.insight_previews import preview_feed
 
 CACHE = Path(__file__).resolve().parents[1] / 'stage5_insight_detection/analytics_insights/cache'
@@ -28,9 +31,9 @@ def account_job_id(account):
     return f"demo-{account['company_id']}-{account['role']}"
 
 
-def catalog(jobs=(), user_id=None, root=None):
+def catalog(jobs=(), user_id=None, root=None, extra=()):
     accounts = []
-    for account in ACCOUNTS:
+    for account in (*ACCOUNTS, *extra):
         try:
             feed = cabinet_feed(account['company_id'], account['role'], jobs, user_id, root)
         except (KeyError, OSError, ValueError):
@@ -105,12 +108,15 @@ def cabinet_feed(company_id, role, jobs=(), user_id=None, root=None):
         completed.append(cached_job(f'demo-{company_id}-{role}', root))
     except (KeyError, OSError, ValueError):
         pass
-    cards, seen = [], set()
+    cards, seen, hidden = [], set(), 0
     for job in completed:
         rows = (job.get('result') or {}).get('results', [])
         for card in preview_feed(job)['insights']:
             key = _row_key(rows[card['result_index']])
             if key not in seen:
+                if any(level == 'fail' for level, _ in check_row(rows[card['result_index']])):
+                    hidden += 1  # a claim without a resolvable source is never shown
+                    continue
                 seen.add(key)
                 cards.append(card)
     newest = completed[0] if completed else None
@@ -119,7 +125,7 @@ def cabinet_feed(company_id, role, jobs=(), user_id=None, root=None):
     latest = mine[0] if mine else None
     return dict(computed_at=max((job.get('finished_at') or job['created_at'] for job in completed),
                                 key=_time, default=None),
-                insights=cards, status=newest['status'] if newest else 'none',
+                insights=cards, hidden=hidden, status=newest['status'] if newest else 'none',
                 errors=(newest.get('result') or {}).get('errors', []) if newest else [],
                 running_job=dict(id=running['id'], status=running['status']) if running else None,
                 latest_job=dict(id=latest['id'], status=latest['status'], error=latest.get('error')) if latest else None)
@@ -193,7 +199,7 @@ def _company_table():
     import pandas as pd
     from common.data import DATA
     return pd.read_csv(DATA / 'df_Uid_data_hack.csv', sep=';', dtype=str,
-                       usecols=['SYNTHETIC_U', 'MAINOKVED_NAME', 'CITY']).fillna('')
+                       usecols=['SYNTHETIC_U', 'MAINOKVED_NAME', 'CITY', 'REVENUE_COMPANY']).fillna('')
 
 
 def search_companies(query):
@@ -212,3 +218,80 @@ def search_companies(query):
 def company_name(company_id, activity):
     activity = re.sub(r'^Деятельность по\s+', '', activity or '', flags=re.I).strip()
     return f'{activity[:1].upper() + activity[1:] if activity else "Компания"} №{company_id.removeprefix("U_")}'
+
+
+# ---- background discovery of companies that already have a pre-computed (checked) feed ----
+COLORS = ('blue', 'amber', 'green')
+
+
+def _finished_pairs(jobs, root):
+    pairs = {(j['request']['company_id'], j['request']['role']) for j in jobs
+             if j.get('status') in ('succeeded', 'partial') and j.get('request', {}).get('role') in roles()
+             and j['request'].get('user_id') is None}
+    local = (Path(root) if root is not None else DATA / 'api') / 'analytics_cache'
+    for folder in (local, CACHE, NEWS_CACHE):
+        for path in folder.glob('**/U_*_*.json'):
+            company, _, role = path.stem.rpartition('_')
+            if role in roles():
+                pairs.add((company, role))
+    return sorted(pairs)
+
+
+def _generated_account(company_id, role):
+    row = {}
+    try:
+        table = _company_table()
+        found = table[table['SYNTHETIC_U'] == company_id]
+        row = found.iloc[0].to_dict() if len(found) else {}
+    except (FileNotFoundError, KeyError, OSError):
+        pass
+    sector = row.get('MAINOKVED_NAME') or 'Компания'
+    revenue = float(row.get('REVENUE_COMPANY') or 2e10)  # bank-shell money is demonstrative: scaled from the company's revenue
+    words = [w for w in re.findall(r'[А-Яа-яЁё]+', sector) if len(w) > 2][:2] or ['К']
+    return dict(id=f'{company_id}-{role}', company_id=company_id, initials=''.join(w[0].upper() for w in words), sector=sector,
+                city='Москва' if 'Москва' in str(row.get('CITY', '')) or not row.get('CITY') else str(row['CITY']).removeprefix('г. '),
+                role=role, color=COLORS[sum(map(ord, company_id)) % 3], balance=round(revenue * .07, 2),
+                credit=round(revenue * .2, -6), deposit=round(revenue * .03, -6) if role in ('treasury', 'cfo') else 0)
+
+
+class Precomputed:
+    """Re-checks every finished run in the background and keeps the cabinets of companies with a showable pre-computed feed.
+    Reads saved data only (check_row is deterministic): it never starts a model."""
+
+    def __init__(self, get_jobs, get_root, every=30):
+        self.get_jobs, self.get_root, self.every = get_jobs, get_root, every
+        self.accounts, self.report, self.checked_at = [], [], None
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._loop, name='precomputed-check', daemon=True)
+
+    def start(self):
+        self._thread.start()
+        return self
+
+    def stop(self):
+        self._stop.set()
+        if self._thread.is_alive():
+            self._thread.join()
+
+    def _loop(self):
+        while not self._stop.is_set():
+            try:
+                self.refresh()
+            except Exception as error:  # a broken saved file must not kill the watcher
+                self.report = [dict(error=repr(error))]
+            self._stop.wait(self.every)
+
+    def refresh(self):
+        jobs, root = self.get_jobs(), self.get_root()
+        static = {(a['company_id'], a['role']) for a in ACCOUNTS}
+        accounts, report = [], []
+        for company, role in _finished_pairs(jobs, root):
+            try:
+                feed = cabinet_feed(company, role, jobs, None, root)
+            except (KeyError, OSError, ValueError):
+                continue
+            report.append(dict(company_id=company, role=role, shown=len(feed['insights']), hidden=feed.get('hidden', 0),
+                               listed=(company, role) in static or bool(feed['insights'])))
+            if feed['insights'] and (company, role) not in static:
+                accounts.append(_generated_account(company, role))
+        self.accounts, self.report, self.checked_at = accounts, report, time.strftime('%Y-%m-%dT%H:%M:%S%z')

@@ -15,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import ValidationError
 
 from backend.jobs import QueueFull
-from backend.cabinet import cached_job, cabinet_feed, catalog as cabinet_catalog, search_companies
+from backend.cabinet import Precomputed, cached_job, cabinet_feed, catalog as cabinet_catalog, search_companies
 from backend.insight_previews import detail, metadata, preview_feed
 from backend.schemas import AnalysisRequest, AskRequest, BatchRequest, PreparationRequest, SearchRequest, JobResponse
 from backend.service import Service
@@ -35,9 +35,13 @@ def create_app(service=None, cors_origins=None, payment_analytics=None):
             for pdf in sorted(PDF_DIR.glob('*.pdf')):
                 try: app.state.service.prepare(pdf,PreparationOptions(),PDF_DIR)
                 except QueueFull: break
-        yield
-        import asyncio
-        await asyncio.to_thread(app.state.service.close)
+        app.state.precomputed=Precomputed(cabinet_jobs, lambda: app.state.service.root).start()
+        try:
+            yield
+        finally:
+            import asyncio
+            await asyncio.to_thread(app.state.precomputed.stop)
+            await asyncio.to_thread(app.state.service.close)
 
     app=FastAPI(title='AlfaFuture Insight API',version='1.0.0',lifespan=lifespan,
                 description='Background agent analyses and PDF preparation. Poll job status/results. Swagger exposes every pipeline switch.')
@@ -161,7 +165,12 @@ def create_app(service=None, cors_origins=None, payment_analytics=None):
 
     @app.get('/v1/cabinet/accounts',tags=['companies'])
     def cabinet_accounts(x_user_id: User = None):
-        return cabinet_catalog(cabinet_jobs(), x_user_id, svc().root)
+        return cabinet_catalog(cabinet_jobs(), x_user_id, svc().root, extra=app.state.precomputed.accounts)
+
+    @app.get('/v1/cabinet/precomputed',tags=['companies'],summary='Background check of finished runs: which companies are showable from saved data')
+    def cabinet_precomputed():
+        pre=app.state.precomputed
+        return dict(checked_at=pre.checked_at,items=pre.report)
 
     @app.get('/v1/cabinet/feed',tags=['companies'])
     def reader_feed(company_id: str, role: str, x_user_id: User = None):
