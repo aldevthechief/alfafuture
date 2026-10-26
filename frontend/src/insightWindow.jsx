@@ -16,6 +16,8 @@ import { InsightTabs } from './insightTabs.jsx';
 import { InsightReader } from './insightReader.jsx';
 import { ChatSplit } from './chatSplit.jsx';
 import { FEEDBACK_ENABLED } from './feedback.js';
+import { InsightConditions } from './conditionFit.jsx';
+import { bankReports } from './bankSources.js';
 import './insightWorkspace.css';
 
 const NO_TRANSITION = { enter: false, exit: false, timeout: 0 };
@@ -51,11 +53,11 @@ function Labeled({ items }) {
   return <ul className="lab">{items.map((x, n) => <li key={n}>{x.label && <b>{x.label}. </b>}{x.text}</li>)}</ul>;
 }
 
-// news by title; company data and the bank's reports merged into one line each
+// Bank reports retain their publication date and every cited page.
 const Sources = memo(function Sources({ ids, sources }) {
   const news = ids.filter(id => sources[id]?.kind === 'news');
   const facts = ids.some(id => sources[id]?.kind === 'fact');
-  const bank = ids.some(id => sources[id]?.kind === 'bank');
+  const reports = bankReports(ids, sources);
   return <div className="side-card">
     <Typography.Text view="caps" weight="bold" tag="div">Источники</Typography.Text>
     <ul className="src2">
@@ -68,7 +70,9 @@ const Sources = memo(function Sources({ ids, sources }) {
         </li>;
       })}
       {facts && <li>Данные компании <small>· профиль клиента в Альфа-Банке</small></li>}
-      {bank && <li>Внутренние отчёты Альфа-Банка</li>}
+      {reports.map(report => <li key={report.key}>{report.name}
+        <small> · Альфа-Банк{report.date && day(report.date) ? `, ${new Date(report.date).toLocaleDateString('ru-RU', { day:'numeric', month:'long', year:'numeric' })}` : ''}
+          {report.pages.length > 0 ? `, с. ${report.pages.join(', ')}` : ''}</small></li>)}
     </ul>
   </div>;
 });
@@ -124,7 +128,7 @@ function InsightDetails({ id, insight: i, compact, sources, company, onHide }) {
   };
   const [feedbackTarget, setFeedbackTarget] = useState(null);
   const v = useMemo(() => view(i, compact), [i, compact]);
-  const [color, conf] = CONFIDENCE[i.confidence] || CONFIDENCE.low;
+  const [color, conf, confTitle] = CONFIDENCE[i.confidence] || CONFIDENCE.low;
   const used = useMemo(() => [...new Set([...v.facts, ...v.why, ...v.risks, ...v.opportunities, ...v.bank_view, ...(i.hypotheses || [])].flatMap(x => x.sources || []))], [v, i]);
 
   return <>
@@ -135,12 +139,12 @@ function InsightDetails({ id, insight: i, compact, sources, company, onHide }) {
         <div className={`iwin insight-detail-tone-${insightSignal(i).tone}`}>
           <div className="ic-tags">
             <SignalBadge insight={i} />
-            <Status color={color} size={20}>{conf}</Status>
-            {i.bank_view.length > 0 && <Status color="purple" size={20}>Есть позиция Банка</Status>}
+            <span title={confTitle}><Status color={color} size={20}>{conf}</Status></span>
+            {i.bank_view.length > 0 && <Status color="purple" size={20}>Позиция Банка</Status>}
           </div>
           <Typography.Text view="primary-large" color="secondary" tag="p">{v.lead}</Typography.Text>
           <div className="iwin-grid">
-            <InsightBody insight={i} v={v} compact={compact} sources={sources} />
+            <InsightBody insight={i} v={v} compact={compact} sources={sources} company={company} />
             <aside className="iwin-side">
               <div className="agent-invitation">
                 <span className="agent-avatar"><InsightIcon name="sparkle" size={24} /></span>
@@ -187,7 +191,7 @@ function InsightDetails({ id, insight: i, compact, sources, company, onHide }) {
   </>;
 }
 
-const InsightBody = memo(function InsightBody({ insight: i, v, compact, sources }) {
+const InsightBody = memo(function InsightBody({ insight: i, v, compact, sources, company }) {
   return <div className="iwin-main">
             {v.facts.length > 0 && <Section kind="fact" label="Факты · что произошло">
               <ul className="facts">{v.facts.map((x, n) => {
@@ -200,7 +204,7 @@ const InsightBody = memo(function InsightBody({ insight: i, v, compact, sources 
             </Section>}
             <Section kind="ai" label="Вывод AI · почему это важно вам"><Labeled items={v.why} /></Section>
             {v.important_if.length > 0 && <Section kind="hyp" label="Особенно важно, если">
-              <ul>{v.important_if.map(t => <li key={t}>{t}</li>)}</ul>
+              <InsightConditions company={company} role={i.role} insightId={i.id} items={v.important_if} />
             </Section>}
             {(v.risks.length > 0 || v.opportunities.length > 0) && <div className="ro">
               {v.risks.length > 0 && <Section kind="risk" label="🐻 Риски"><Labeled items={v.risks} /></Section>}

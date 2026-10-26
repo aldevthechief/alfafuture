@@ -1,14 +1,8 @@
 import React from 'react';
-import { insightSignal } from './insightSignal.js';
+import { Status } from '@alfalab/core-components/status';
+import { signalTags } from './insightSignal.js';
 
+// Same component and size as every other tag on the card (channel, confidence, bank position).
 export function SignalBadge({ insight }) {
-  const signal = insightSignal(insight);
-  return <>
-    <span className={`insight-signal signal-${signal.tone}`} title={signal.reason}>
-      <span aria-hidden="true">{signal.emoji}</span> {signal.label}
-    </span>
-    {signal.high && <span className="insight-signal signal-important" title="В существующем анализе указан высокий уровень влияния на компанию.">
-      <span aria-hidden="true">🔥</span> Высокое влияние
-    </span>}
-  </>;
+  return <>{signalTags(insight).map(t => <span key={t.label} title={t.reason}><Status color={t.color} size={20}>{t.label}</Status></span>)}</>;
 }

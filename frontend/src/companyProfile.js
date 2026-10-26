@@ -10,6 +10,11 @@ export function useCompanyProfile(ctx, feed, enabled) {
   const version = JSON.stringify((feed?.insights || []).map(card => [card.job_id, card.id]).sort());
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
   useEffect(() => {
+    const changed = event => { if (event.detail.company === ctx.company) setRetry(value => value + 1); };
+    window.addEventListener('cabinet:profile-answer', changed);
+    return () => window.removeEventListener('cabinet:profile-answer', changed);
+  }, [ctx.company]);
+  useEffect(() => {
     if (!enabled) return;
     let cancelled = false;
     setState(previous => ({ ...previous, loading:true, error:'' }));

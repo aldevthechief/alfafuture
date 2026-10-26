@@ -62,7 +62,7 @@ export default function HomeDashboard({ company, name, role, insights, unreadCou
     <div className="hd-main-grid">
       <section className={`card hd-feature${signal ? ` hd-feature-${signal.tone}` : ''}`} aria-labelledby="hd-feature-title">
         <div className="hd-section-label"><span><Icon name="insight"/>В центре внимания</span>{unreadCount>0 && <button type="button" className="hd-unread" onClick={onNotifications}>Новых · {unreadCount}</button>}</div>
-        {top ? <><span className="hd-signal">{signal.emoji} {signal.label}{signal.high && ' · Высокое влияние'}</span><h2 id="hd-feature-title">{top.compact?.title || top.title}</h2>
+        {top ? <><span className="hd-signal">{signal.label}{signal.high && ' · Высокое влияние'}</span><h2 id="hd-feature-title">{top.compact?.title || top.title}</h2>
           <p className="hd-feature-lead">{top.compact?.lead || top.lead || top.why_it_matters?.[0]?.text}</p>
           <div className="hd-feature-meta">{[day(top.published),top.channel].filter(Boolean).join(' · ')}</div>
           <footer><button type="button" className="btn btn-red" onClick={()=>onOpen(top)}>Разобрать с помощником <span aria-hidden="true">↗</span></button><button type="button" className="hd-text-button" onClick={()=>onNavigate('insights')}>Все инсайты <span aria-hidden="true">→</span></button></footer>

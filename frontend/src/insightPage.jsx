@@ -64,7 +64,7 @@ export default memo(function Page({ company, feed, role, live, run, visible, hid
         <div className="ip-search-tags"><span>Теги</span><div className="ip-filters" role="group" aria-label="Теги инсайтов">
           {[['all', 'Все'], ['risks', 'Риски'], ['opps', 'Возможности'], ...channels.map(c => [c, c])].map(([id, t]) =>
             <Tag key={id} size={32} checked={id==='all' ? !filters.length : filters.includes(id)} aria-pressed={id==='all' ? !filters.length : filters.includes(id)}
-              onClick={() => setFilters(previous=>toggleInsightTag(previous,id))}>{t}</Tag>)}
+              onClick={() => setFilters(previous=>toggleInsightTag(previous,id))}>{t.charAt(0).toUpperCase() + t.slice(1)}</Tag>)}
         </div></div>
         <div className="ip-search-status"><span role="status">{query.trim() || filters.length ? 'Найдено' : 'В ленте'} · {shown.length}{filters.length>0 && ` · тегов: ${filters.length}`}</span>
           {(query || filters.length>0) && <button type="button" onClick={()=>{setQuery('');setFilters([]);}}>Сбросить поиск и теги</button>}</div>
