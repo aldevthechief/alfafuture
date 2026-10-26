@@ -33,33 +33,40 @@ def _redis(prefix: str):
 
 
 def unpack(path: Path) -> Path:
-    """The repo ships the LLM cache as <name>.jsonl.gz: a fresh clone unpacks it once, next to it (atomic rename)."""
+    """The repo ships the LLM cache as <name>.jsonl.gz: answers missing from the local JSONL are appended to it
+    (the local file keeps its own newer answers); the rerun happens only when the .gz is newer than the file."""
     packed = path.with_name(path.name + '.gz')
-    if not path.exists() and packed.exists():
-        import gzip, shutil
-        tmp = path.with_name(f'{path.name}.{os.getpid()}.tmp')
-        try:
-            with gzip.open(packed, 'rb') as src, open(tmp, 'wb') as dst:
-                shutil.copyfileobj(src, dst)
-            os.replace(tmp, path)
-        except OSError:
-            tmp.unlink(missing_ok=True)
+    try:
+        if not packed.exists() or (path.exists() and path.stat().st_mtime >= packed.stat().st_mtime):
+            return path
+        import gzip
+        have = set()
+        if path.exists():
+            with open(path, encoding='utf-8') as f:
+                have = {json.loads(line)['key'] for line in f if line.strip()}
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with gzip.open(packed, 'rt', encoding='utf-8') as src, open(path, 'a', encoding='utf-8') as dst:
+            for line in src:
+                if line.strip() and json.loads(line)['key'] not in have:
+                    dst.write(line if line.endswith('\n') else line + '\n')
+    except (OSError, ValueError):
+        pass  # warm start only
     return path
 
 
-def seed_if_empty(client, key: str, path: Path) -> None:
-    """An empty Redis (new volume) is warmed from the shipped JSONL; a filled one is left as is."""
+def seed_missing(client, key: str, path: Path) -> None:
+    """Redis (a new volume or an older seed) gets the shipped answers it lacks; existing entries are kept."""
     try:
-        if client.exists(key) or not unpack(path).exists():
-            return
-        with open(path, encoding='utf-8') as f:
+        with open(unpack(path), encoding='utf-8') as f:
             entries = [json.loads(line) for line in f if line.strip()]
+        if client.hlen(key) >= len(entries):
+            return
         pipe = client.pipeline(transaction=False)
         for d in entries:
             pipe.hsetnx(key, d['key'], d['value'])
         pipe.execute()
     except Exception:
-        pass  # warm start only: a cold cache still works, just calls the model
+        pass  # a cold cache still works, it just calls the model
 
 
 class JsonlCache:
@@ -216,7 +223,7 @@ def _redis_llm_cache() -> BaseCache | None:
     if not shared:
         return None
     client, key = shared
-    seed_if_empty(client, key, DATA / 'llm_cache' / 'llm.jsonl')
+    seed_missing(client, key, DATA / 'llm_cache' / 'llm.jsonl')
 
     class RedisLLMCache(BaseCache):
         """Same request -> same answer from Redis, no API call; the volume keeps them across restarts."""
