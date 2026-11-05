@@ -30,14 +30,11 @@ docker compose version
 
 ```dotenv
 # Copy to common/llm/.env for live LLM calls. The frontend works without a key.
-LLM_API_KEY=sk-viBWE0gDSjn7YrFV1h1hEQ
+LLM_API_KEY=your_team_key
 LLM_BASE_URL=https://changellenge.up.railway.app/v1
 AGENT_MODEL=z-ai/glm-5.3-flash
 CHEAP_MODEL=google/gemma-4-26b-a4b-it
 VISION_MODEL=qwen/qwen3-vl-30b-a3b-instruct
-LANGFUSE_SECRET_KEY=sk-lf-aeda40eb-03c8-4715-869a-bcb205e5506b
-LANGFUSE_PUBLIC_KEY=pk-lf-3db0055d-48d1-4ab8-b00f-71478ec7569e
-LANGFUSE_BASE_URL=https://us.cloud.langfuse.com
 ```
 
 Ключ остаётся в локальном `.env`, исключённом из Git. Переменные окружения процесса имеют приоритет над файлом. Идентификаторы моделей должны поддерживаться выбранным прокси. Для замены ключа в запущенной системе отредактируйте файл и выполните `docker compose restart backend feedback-api`.
